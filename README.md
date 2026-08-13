@@ -22,7 +22,7 @@ as asynchronous arrivals.
 Prerequisites: Node.js 22.13 or newer.
 
 ```bash
-cd "/Users/stefan/Documents/Moses/Job Hunting/OSL/FlowHedge"
+cd FlowHedge
 npm install
 npm run dev
 ```
@@ -35,7 +35,7 @@ page automatically when frontend files change. Stop it with `Control-C`.
 Open a second terminal:
 
 ```bash
-cd "/Users/stefan/Documents/Moses/Job Hunting/OSL/FlowHedge"
+cd FlowHedge
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r backend/requirements.txt
