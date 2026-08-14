@@ -4,8 +4,8 @@ FlowHedge is an institutional crypto sales-trading simulator. The current
 checkpoint contains the reviewable trading-terminal layout, a backend-driven
 institutional client-flow simulator, and an accounting chain from RFQ through
 client fill, manual Spot/Perp hedge orders, simulated fills, and desk-state
-updates. It also consumes Kraken's public BTC/USD Spot order book through a
-venue-neutral market-data layer.
+updates. It also consumes public Kraken and Coinbase BTC market data through a
+venue-neutral, multi-instrument market-data layer.
 Production pricing, hedge optimization, risk policy, and PnL logic remain
 deferred.
 
@@ -13,7 +13,7 @@ deferred.
 
 - **Header:** instrument, live Kraken Spot mid-price, independent API/market connectivity, and manual/auto hedge mode.
 - **Desk strip:** actual, working, and projected delta plus Spot and derivative positions.
-- **Left rail:** live Kraken depth-25 book, multi-order RFQ inbox, and backend flow pause/resume controls.
+- **Left rail:** selectable Kraken/Coinbase Spot and Perp depth-25 books, multi-order RFQ inbox, and backend flow pause/resume controls.
 - **Center stage:** pending/accepted demo client quotes, live-but-not-optimized Kraken hedge reference, manual hedge allocation and simulated fill controls, and event tape.
 - **Right rail:** reconciled desk positions, deferred PnL, and the hedge order/fill blotter.
 
@@ -174,6 +174,45 @@ arrival time is intentionally not exposed to the UI.
   restarts its slow schedule.
 - `POST /demo/client-flow/generate` remains available only as a test-support
   seam; the normal page never calls or displays it.
+
+## Step 6 unified multi-venue market state
+
+The normalized market layer now supports multiple venues and multiple
+instrument types without allowing Spot and Perpetual books with the same
+canonical symbol to collide. The live universe for this checkpoint is:
+
+- Kraken `BTC/USD` Spot.
+- Coinbase `BTC-USD` Spot.
+- Coinbase International `BTC-PERP-INTX` linear Perpetual.
+
+Coinbase Spot and Perpetual L2 data come from the public Advanced Trade market
+data WebSocket. Product rules come from Coinbase's public product endpoint. No
+Coinbase account, private API key, or order permission is used.
+
+- `GET /market/books/{venue}/{instrument_type}/{symbol}` returns one explicitly
+  typed market. The original Spot route remains available for compatibility.
+- `GET /market/snapshots/BTC` atomically returns every registered BTC market,
+  one snapshot version, eligibility, stale/unavailable reasons, current books,
+  product rules, and feed connection state.
+- Connection identity belongs to a specific feed rather than only a venue, so
+  future Spot and derivatives adapters can fail independently when they use
+  separate connections.
+- Coinbase retains a bounded 2,000-level working buffer per side and publishes
+  only the current normalized depth-25 book. No historical updates accumulate.
+- The page polls the unified snapshot and lets the trader inspect each live
+  market while the accepted Step 5 RFQ and manual hedge behavior continues to
+  use Kraken Spot.
+
+Coinbase Perpetual is quoted and settled in USDC. This checkpoint explicitly
+uses `USDC ≈ USD` as a configurable `1:1 demo assumption`; it does not silently
+rename the quote currency. Contract structure, multiplier, settlement asset,
+tick, quantity increment, and minimum quantity are preserved for the future
+Cost Engine. Funding cost is intentionally deferred and is not included in any
+calculation.
+
+This step does not yet compare execution costs, recommend hedges, route orders,
+or change RFQ pricing. Those remain responsibilities of later Risk Policy,
+Cost Engine, Hedge Optimizer, SOR, and Pricing Engine steps.
 
 ## Validate
 

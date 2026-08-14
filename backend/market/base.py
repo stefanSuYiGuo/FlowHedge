@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from ..domain.models import InstrumentType
 from .models import MarketVenue
 
 
 class MarketDataAdapter(ABC):
+    feed_id: str
     venue: MarketVenue
     endpoint: str
-    symbols: tuple[str, ...]
+    markets: tuple[tuple[str, InstrumentType], ...]
 
     @abstractmethod
     async def run(self) -> None:

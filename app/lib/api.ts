@@ -10,6 +10,7 @@ import type {
   HedgeOrder,
   HedgeOrderBatchResult,
   MarketStateView,
+  UnifiedMarketSnapshot,
 } from "./types";
 
 const configuredBaseUrl = process.env.NEXT_PUBLIC_FLOWHEDGE_API_URL;
@@ -98,10 +99,19 @@ export function getHedgeFills(): Promise<HedgeFill[]> {
 
 export function getMarketState(
   venue: string,
+  instrumentType: "SPOT" | "PERPETUAL",
   symbol: string,
 ): Promise<MarketStateView> {
   return request<MarketStateView>(
-    `/market/books/${encodeURIComponent(venue)}/${encodeURIComponent(symbol)}`,
+    `/market/books/${encodeURIComponent(venue)}/${encodeURIComponent(instrumentType)}/${encodeURIComponent(symbol)}`,
+  );
+}
+
+export function getUnifiedMarketSnapshot(
+  baseAsset: string,
+): Promise<UnifiedMarketSnapshot> {
+  return request<UnifiedMarketSnapshot>(
+    `/market/snapshots/${encodeURIComponent(baseAsset)}`,
   );
 }
 

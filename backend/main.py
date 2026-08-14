@@ -28,6 +28,7 @@ from .domain.models import (
     HedgeFillResult,
     HedgeOrder,
     HedgeOrderBatchResult,
+    InstrumentType,
 )
 from .domain.validation import (
     RFQBelowMinimumNotional,
@@ -35,7 +36,12 @@ from .domain.validation import (
     validate_client_rfq_notional,
 )
 from .market import market_data_service, market_state_store
-from .market.models import MarketConnectionState, MarketStateView, MarketVenue
+from .market.models import (
+    MarketConnectionState,
+    MarketStateView,
+    MarketVenue,
+    UnifiedMarketSnapshot,
+)
 
 
 @asynccontextmanager
@@ -79,7 +85,7 @@ async def health() -> dict[str, str]:
     tags=["market-data"],
 )
 async def get_market_book(venue: str, symbol: str) -> MarketStateView:
-    """Return the latest normalized book, metadata, and connection state."""
+    """Return the latest Spot book through the backwards-compatible route."""
 
     try:
         market_venue = MarketVenue(venue.upper())
@@ -87,12 +93,60 @@ async def get_market_book(venue: str, symbol: str) -> MarketStateView:
         raise HTTPException(status_code=404, detail="unsupported market venue") from error
 
     canonical_symbol = symbol.upper()
-    if not market_data_service.supports(market_venue, canonical_symbol):
+    if not market_data_service.supports(
+        market_venue, canonical_symbol, InstrumentType.SPOT
+    ):
         raise HTTPException(
             status_code=404,
-            detail=f"unsupported market: {market_venue.value}/{canonical_symbol}",
+            detail=(
+                f"unsupported market: {market_venue.value}/SPOT/{canonical_symbol}"
+            ),
         )
-    return await market_state_store.view(market_venue, canonical_symbol)
+    return await market_state_store.view(
+        market_venue, canonical_symbol, InstrumentType.SPOT
+    )
+
+
+@app.get(
+    "/market/books/{venue}/{instrument_type}/{symbol}",
+    response_model=MarketStateView,
+    tags=["market-data"],
+)
+async def get_typed_market_book(
+    venue: str, instrument_type: str, symbol: str
+) -> MarketStateView:
+    """Return one normalized Spot or Perpetual market without identity collisions."""
+
+    try:
+        market_venue = MarketVenue(venue.upper())
+        market_instrument_type = InstrumentType(instrument_type.upper())
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail="unsupported market identity") from error
+    canonical_symbol = symbol.upper()
+    if not market_data_service.supports(
+        market_venue, canonical_symbol, market_instrument_type
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"unsupported market: {market_venue.value}/"
+                f"{market_instrument_type.value}/{canonical_symbol}"
+            ),
+        )
+    return await market_state_store.view(
+        market_venue, canonical_symbol, market_instrument_type
+    )
+
+
+@app.get(
+    "/market/snapshots/{base_asset}",
+    response_model=UnifiedMarketSnapshot,
+    tags=["market-data"],
+)
+async def get_unified_market_snapshot(base_asset: str) -> UnifiedMarketSnapshot:
+    """Atomically read every registered normalized market for one base asset."""
+
+    return await market_state_store.snapshot(base_asset)
 
 
 @app.get(

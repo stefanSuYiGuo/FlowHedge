@@ -8,7 +8,12 @@ from pathlib import Path
 import backend.client_flow.service as client_flow_module
 from backend.client_flow.service import ClientFlowSimulator, generate_rfq_quantity
 from backend.demo import DemoTradingService
-from backend.domain.models import ClientSide, MarketObservation, MarketSnapshot
+from backend.domain.models import (
+    ClientSide,
+    InstrumentType,
+    MarketObservation,
+    MarketSnapshot,
+)
 from backend.market.book import KrakenOrderBookBuilder
 from backend.market.kraken import BOOK_DEPTH, CANONICAL_SYMBOL, KRAKEN_SPOT_WS_ENDPOINT
 from backend.market.models import MarketConnectionStatus, MarketVenue
@@ -36,7 +41,12 @@ def test_generated_quantities_are_varied_and_strictly_above_500k() -> None:
 
 async def live_fixture_store() -> InMemoryMarketStateStore:
     store = InMemoryMarketStateStore()
-    await store.register_venue(MarketVenue.KRAKEN, KRAKEN_SPOT_WS_ENDPOINT)
+    await store.register_feed(
+        "kraken-public-spot",
+        MarketVenue.KRAKEN,
+        KRAKEN_SPOT_WS_ENDPOINT,
+        ((CANONICAL_SYMBOL, InstrumentType.SPOT),),
+    )
     fixture = json.loads(
         (FIXTURES / "kraken_book_snapshot.json").read_text()
     )["data"][0]
@@ -45,7 +55,7 @@ async def live_fixture_store() -> InMemoryMarketStateStore:
     )
     await store.replace_book(book)
     await store.update_connection(
-        MarketVenue.KRAKEN,
+        "kraken-public-spot",
         status=MarketConnectionStatus.LIVE,
         last_book_update_at=datetime.now(timezone.utc),
     )

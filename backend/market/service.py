@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 
+from ..domain.models import InstrumentType
 from .base import MarketDataAdapter
+from .coinbase import CoinbaseMarketDataAdapter
 from .kraken import KrakenSpotMarketDataAdapter
 from .models import MarketVenue
 from .store import InMemoryMarketStateStore
@@ -22,22 +24,32 @@ class MarketDataService:
         self.adapters = adapters
         self._tasks: list[asyncio.Task[None]] = []
         self._supported_markets = {
-            (adapter.venue, symbol)
+            (adapter.venue, symbol, instrument_type)
             for adapter in adapters
-            for symbol in adapter.symbols
+            for symbol, instrument_type in adapter.markets
         }
 
-    def supports(self, venue: MarketVenue, symbol: str) -> bool:
-        return (venue, symbol) in self._supported_markets
+    def supports(
+        self,
+        venue: MarketVenue,
+        symbol: str,
+        instrument_type: InstrumentType,
+    ) -> bool:
+        return (venue, symbol, instrument_type) in self._supported_markets
 
     async def start(self) -> None:
         if self._tasks:
             return
         for adapter in self.adapters:
-            await self.store.register_venue(adapter.venue, adapter.endpoint)
+            await self.store.register_feed(
+                adapter.feed_id,
+                adapter.venue,
+                adapter.endpoint,
+                adapter.markets,
+            )
             self._tasks.append(
                 asyncio.create_task(
-                    adapter.run(), name=f"market-data-{adapter.venue.value.lower()}"
+                    adapter.run(), name=f"market-data-{adapter.feed_id}"
                 )
             )
 
@@ -53,5 +65,8 @@ class MarketDataService:
 market_state_store = InMemoryMarketStateStore()
 market_data_service = MarketDataService(
     market_state_store,
-    adapters=(KrakenSpotMarketDataAdapter(market_state_store),),
+    adapters=(
+        KrakenSpotMarketDataAdapter(market_state_store),
+        CoinbaseMarketDataAdapter(market_state_store),
+    ),
 )

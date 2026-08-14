@@ -38,9 +38,10 @@ class KrakenMessageTimeout(TimeoutError):
 
 
 class KrakenSpotMarketDataAdapter(MarketDataAdapter):
+    feed_id = "kraken-public-spot"
     venue = MarketVenue.KRAKEN
     endpoint = KRAKEN_SPOT_WS_ENDPOINT
-    symbols = (CANONICAL_SYMBOL,)
+    markets = ((CANONICAL_SYMBOL, InstrumentType.SPOT),)
 
     def __init__(self, store: InMemoryMarketStateStore) -> None:
         self.store = store
@@ -51,7 +52,7 @@ class KrakenSpotMarketDataAdapter(MarketDataAdapter):
             await self._run_forever()
         finally:
             await self.store.update_connection(
-                self.venue,
+                self.feed_id,
                 status=MarketConnectionStatus.DISCONNECTED,
                 last_error="market data service stopped",
             )
@@ -65,7 +66,7 @@ class KrakenSpotMarketDataAdapter(MarketDataAdapter):
                 else MarketConnectionStatus.RECONNECTING
             )
             await self.store.update_connection(
-                self.venue,
+                self.feed_id,
                 status=status,
                 reconnect_attempt=reconnect_attempt,
                 clear_error=reconnect_attempt == 0,
@@ -80,9 +81,11 @@ class KrakenSpotMarketDataAdapter(MarketDataAdapter):
                 ) as websocket:
                     connected_at = utc_now()
                     self._book_builder = KrakenOrderBookBuilder(depth=BOOK_DEPTH)
-                    await self.store.clear_book(self.venue, CANONICAL_SYMBOL)
+                    await self.store.clear_book(
+                        self.venue, CANONICAL_SYMBOL, InstrumentType.SPOT
+                    )
                     await self.store.update_connection(
-                        self.venue,
+                        self.feed_id,
                         status=status,
                         connected_at=connected_at,
                         reconnect_attempt=reconnect_attempt,
@@ -95,7 +98,7 @@ class KrakenSpotMarketDataAdapter(MarketDataAdapter):
             except KrakenMessageTimeout as error:
                 reconnect_attempt += 1
                 await self.store.update_connection(
-                    self.venue,
+                    self.feed_id,
                     status=MarketConnectionStatus.STALE,
                     last_error=str(error),
                     reconnect_attempt=reconnect_attempt,
@@ -103,7 +106,7 @@ class KrakenSpotMarketDataAdapter(MarketDataAdapter):
             except (ConnectionClosed, OSError, ValueError, KeyError, TypeError) as error:
                 reconnect_attempt += 1
                 await self.store.update_connection(
-                    self.venue,
+                    self.feed_id,
                     status=MarketConnectionStatus.DISCONNECTED,
                     last_error=str(error),
                     reconnect_attempt=reconnect_attempt,
@@ -153,7 +156,7 @@ class KrakenSpotMarketDataAdapter(MarketDataAdapter):
 
             received_at = utc_now()
             await self.store.update_connection(
-                self.venue, last_message_at=received_at
+                self.feed_id, last_message_at=received_at
             )
             message = json.loads(raw_message, parse_float=Decimal)
             await self.handle_message(message, received_at=received_at)
@@ -192,7 +195,7 @@ class KrakenSpotMarketDataAdapter(MarketDataAdapter):
             return
         await self.store.replace_book(book)
         await self.store.update_connection(
-            self.venue,
+            self.feed_id,
             status=MarketConnectionStatus.LIVE,
             last_book_update_at=received_at,
             reconnect_attempt=0,

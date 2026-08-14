@@ -6,7 +6,7 @@ import {
   cancelUnfilledHedgeOrders,
   createManualHedgeOrders,
   getDemoWorkspace,
-  getMarketState,
+  getUnifiedMarketSnapshot,
   pauseClientFlow,
   resetDemo,
   resumeClientFlow,
@@ -21,6 +21,7 @@ import type {
   HedgeOrder,
   MarketStateView,
   PendingClientFlow,
+  UnifiedMarketSnapshot,
 } from "./lib/types";
 
 type TradingMode = "manual" | "auto";
@@ -53,7 +54,10 @@ export default function Home() {
   );
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [marketState, setMarketState] = useState<MarketStateView | null>(null);
+  const [marketSnapshot, setMarketSnapshot] = useState<UnifiedMarketSnapshot | null>(null);
+  const [selectedMarketId, setSelectedMarketId] = useState(
+    "KRAKEN:SPOT:BTC-USD",
+  );
   const [marketPollFailed, setMarketPollFailed] = useState(false);
 
   const applyWorkspace = useCallback((workspace: DemoWorkspaceState) => {
@@ -115,23 +119,23 @@ export default function Home() {
     let active = true;
     let pollTimer: number | undefined;
 
-    async function pollKrakenMarket() {
+    async function pollUnifiedMarket() {
       try {
-        const latestMarketState = await getMarketState("KRAKEN", "BTC-USD");
+        const latestMarketSnapshot = await getUnifiedMarketSnapshot("BTC");
         if (!active) return;
-        setMarketState(latestMarketState);
+        setMarketSnapshot(latestMarketSnapshot);
         setMarketPollFailed(false);
       } catch {
         if (!active) return;
         setMarketPollFailed(true);
       } finally {
         if (active) {
-          pollTimer = window.setTimeout(pollKrakenMarket, 250);
+          pollTimer = window.setTimeout(pollUnifiedMarket, 250);
         }
       }
     }
 
-    void pollKrakenMarket();
+    void pollUnifiedMarket();
     return () => {
       active = false;
       if (pollTimer !== undefined) window.clearTimeout(pollTimer);
@@ -141,14 +145,25 @@ export default function Home() {
   const scenario = completedScenarios.at(-1) ?? null;
   const pendingRfq = pendingRfqs.at(-1) ?? null;
 
-  const liveBook = marketState?.book ?? null;
+  const marketStates = marketSnapshot?.markets ?? [];
+  const krakenSpotState = marketStates.find(
+    (market) => market.venue === "KRAKEN" && market.instrument_type === "SPOT",
+  ) ?? null;
+  const selectedMarketState = marketStates.find(
+    (market) => marketIdentity(market) === selectedMarketId,
+  ) ?? krakenSpotState ?? marketStates[0] ?? null;
+  const selectedBook = selectedMarketState?.book ?? null;
+  const selectedMarketStatus = marketPollFailed
+    ? "DISCONNECTED"
+    : (selectedMarketState?.connection.status ?? "CONNECTING");
+  const liveBook = krakenSpotState?.book ?? null;
   const liveMidPrice = liveBook ? Number(liveBook.mid_price) : null;
   const deltaMarkPrice = liveMidPrice ?? (
     scenario ? Number(scenario.market_snapshot.reference_price_usd) : null
   );
   const marketStatus = marketPollFailed
     ? "DISCONNECTED"
-    : (marketState?.connection.status ?? "CONNECTING");
+    : (krakenSpotState?.connection.status ?? "CONNECTING");
   const totalDelta = Number(deskState.total_delta_btc);
   const workingDelta = Number(deskState.working_order_delta_btc);
   const projectedDelta = totalDelta + workingDelta;
@@ -447,48 +462,96 @@ export default function Home() {
       <section className="workspace-grid">
         <aside className="left-rail">
           <Panel
-            title="Live Market Data · Kraken"
-            meta={marketBookMeta(marketState, marketStatus)}
+            title="Live Market Data · Multi-Venue"
+            meta={marketSnapshot
+              ? `SNAPSHOT v${marketSnapshot.snapshot_version} · ${marketStates.filter((market) => market.eligible).length}/${marketStates.length} ELIGIBLE`
+              : "CONNECTING"}
           >
-            {liveBook ? (
+            {marketStates.length > 0 ? (
               <div className="live-market-panel">
-                <div className="top-of-book">
-                  <div><small>BEST BID</small><strong className="bid">{formatUsd(Number(liveBook.best_bid))}</strong></div>
-                  <div><small>BEST ASK</small><strong className="ask">{formatUsd(Number(liveBook.best_ask))}</strong></div>
-                  <div><small>SPREAD</small><strong>{Number(liveBook.spread_bps).toFixed(2)} bps</strong></div>
+                <div className="venue-market-list" aria-label="BTC market feeds">
+                  {marketStates.map((market) => {
+                    const identity = marketIdentity(market);
+                    const status = marketPollFailed
+                      ? "DISCONNECTED"
+                      : market.connection.status;
+                    return (
+                      <button
+                        aria-pressed={identity === marketIdentity(selectedMarketState)}
+                        className={identity === marketIdentity(selectedMarketState) ? "selected" : ""}
+                        key={identity}
+                        onClick={() => setSelectedMarketId(identity)}
+                        type="button"
+                      >
+                        <span>
+                          <strong>{market.venue}</strong>
+                          <small>{market.instrument_type === "PERPETUAL" ? "PERP · USDC" : "SPOT · USD"}</small>
+                        </span>
+                        <span className="venue-touch">
+                          <strong>{market.book ? formatUsd(Number(market.book.mid_price)) : "—"}</strong>
+                          <small>{market.book ? `${Number(market.book.spread_bps).toFixed(2)} bps` : market.exclusion_reason?.replaceAll("_", " ") ?? "WAITING"}</small>
+                        </span>
+                        <span className={`market-status market-status-${status.toLowerCase()}`}>{status}</span>
+                      </button>
+                    );
+                  })}
                 </div>
-                <table className="market-table order-book-table">
-                  <thead><tr><th>BID QTY</th><th>BID</th><th>ASK</th><th>ASK QTY</th></tr></thead>
-                  <tbody>
-                    {liveBook.bids.slice(0, 5).map((bidLevel, index) => {
-                      const askLevel = liveBook.asks[index];
-                      return (
-                        <tr key={`${bidLevel.price}-${askLevel?.price ?? index}`}>
-                          <td>{formatBookQuantity(Number(bidLevel.quantity))}</td>
-                          <td className="bid">{formatUsd(Number(bidLevel.price))}</td>
-                          <td className="ask">{askLevel ? formatUsd(Number(askLevel.price)) : "—"}</td>
-                          <td>{askLevel ? formatBookQuantity(Number(askLevel.quantity)) : "—"}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                <div className="market-metadata">
-                  <span>BOOK L2 · DEPTH {liveBook.depth}</span>
-                  <span>CRC {liveBook.checksum}</span>
-                  <span>
-                    {marketState?.instrument
-                      ? `TICK ${marketState.instrument.price_increment} · MIN ${marketState.instrument.quantity_min} BTC`
-                      : "INSTRUMENT METADATA LOADING"}
-                  </span>
-                </div>
+
+                {selectedBook ? (
+                  <>
+                    <div className="selected-market-heading">
+                      <span>{selectedMarketState?.venue} · {selectedMarketState?.instrument_type}</span>
+                      <strong>{selectedBook.venue_symbol}</strong>
+                    </div>
+                    <div className="top-of-book">
+                      <div><small>BEST BID</small><strong className="bid">{formatUsd(Number(selectedBook.best_bid))}</strong></div>
+                      <div><small>BEST ASK</small><strong className="ask">{formatUsd(Number(selectedBook.best_ask))}</strong></div>
+                      <div><small>SPREAD</small><strong>{Number(selectedBook.spread_bps).toFixed(2)} bps</strong></div>
+                    </div>
+                    <table className="market-table order-book-table">
+                      <thead><tr><th>BID QTY</th><th>BID</th><th>ASK</th><th>ASK QTY</th></tr></thead>
+                      <tbody>
+                        {selectedBook.bids.slice(0, 5).map((bidLevel, index) => {
+                          const askLevel = selectedBook.asks[index];
+                          return (
+                            <tr key={`${bidLevel.price}-${askLevel?.price ?? index}`}>
+                              <td>{formatBookQuantity(Number(bidLevel.quantity))}</td>
+                              <td className="bid">{formatUsd(Number(bidLevel.price))}</td>
+                              <td className="ask">{askLevel ? formatUsd(Number(askLevel.price)) : "—"}</td>
+                              <td>{askLevel ? formatBookQuantity(Number(askLevel.quantity)) : "—"}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    <div className="market-metadata">
+                      <span>BOOK L2 · DEPTH {selectedBook.depth}</span>
+                      <span>{selectedBook.checksum !== null ? `CRC ${selectedBook.checksum}` : `SEQ ${selectedBook.source_sequence ?? "—"}`}</span>
+                      <span>
+                        {selectedMarketState?.instrument
+                          ? `TICK ${selectedMarketState.instrument.price_increment} · MIN ${selectedMarketState.instrument.quantity_min} BTC`
+                          : "INSTRUMENT METADATA LOADING"}
+                      </span>
+                      {selectedMarketState?.instrument?.usd_conversion_assumption && (
+                        <span>USDC≈USD · 1:1 DEMO ASSUMPTION</span>
+                      )}
+                      {selectedMarketState?.instrument_type === "PERPETUAL" && (
+                        <span>FUNDING COST · DEFERRED</span>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <EmptyState
+                    title={`${selectedMarketState?.venue ?? "Market"} ${selectedMarketStatus.toLowerCase()}`}
+                    detail={selectedMarketState?.connection.last_error ?? "Waiting for the first normalized L2 snapshot."}
+                  />
+                )}
               </div>
             ) : (
               <EmptyState
-                title={marketStatus === "DISCONNECTED" ? "Kraken disconnected" : "Waiting for Kraken book"}
+                title={marketPollFailed ? "Market API disconnected" : "Waiting for market feeds"}
                 detail={
-                  marketState?.connection.last_error ??
-                  "The public adapter is connecting and validating its first depth-25 snapshot."
+                  "Kraken and Coinbase public adapters are connecting to their first normalized books."
                 }
               />
             )}
@@ -600,7 +663,7 @@ export default function Home() {
 
           <Panel
             title="Hedge Decision Workspace · Simulated Execution"
-            meta={mode === "manual" ? "MANUAL MODE · STEP 5" : "AUTO MODE · DEFERRED"}
+            meta={mode === "manual" ? "MANUAL MODE · STEP 6" : "AUTO MODE · DEFERRED"}
             grow
           >
             {!scenario ? (
@@ -867,7 +930,7 @@ export default function Home() {
       </section>
 
       <footer className="terminal-footer">
-        <span>LIVE MARKET: KRAKEN SPOT · DEMO CLIENT QUOTE · SIMULATED HEDGE EXECUTION</span>
+        <span>LIVE MARKET: KRAKEN + COINBASE SPOT/PERP · DEMO CLIENT QUOTE · SIMULATED HEDGE EXECUTION</span>
         <span>{flowActive ? "FLOW ACTIVE" : "FLOW PAUSED"} · {mode === "manual" ? "MANUAL HEDGE" : "AUTO DEFERRED"}</span>
       </footer>
     </main>
@@ -907,12 +970,10 @@ function activeRfqMeta(
   return `${scenario.rfq.rfq_id} · AUTO-ACCEPTED & FILLED`;
 }
 
-function marketBookMeta(state: MarketStateView | null, status: string): string {
-  if (state?.book_data_age_ms === null || state?.book_data_age_ms === undefined) {
-    return status;
-  }
-  const age = state.book_data_age_ms;
-  return `${status} · ${age < 1000 ? `${age}ms` : `${(age / 1000).toFixed(1)}s`} OLD`;
+function marketIdentity(state: MarketStateView | null): string {
+  return state
+    ? `${state.venue}:${state.instrument_type}:${state.symbol}`
+    : "";
 }
 
 function describeEvent(event: FlowEvent): string {

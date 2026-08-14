@@ -74,6 +74,16 @@ button:disabled { opacity: .45; cursor: not-allowed !important; }
 .market-table th:first-child, .market-table td:first-child { text-align: left; font-family: var(--font-geist-sans), Arial, sans-serif; }
 .market-table tbody tr:last-child td { border-bottom: 0; }
 .live-market-panel { background: #07131c; }
+.venue-market-list { padding: 7px; display: grid; gap: 5px; border-bottom: 1px solid var(--border); }
+.venue-market-list button { width: 100%; padding: 7px; display: grid; grid-template-columns: 1fr 1fr auto; align-items: center; gap: 7px; color: var(--ink); text-align: left; background: #061019; border: 1px solid var(--border); cursor: pointer; }
+.venue-market-list button.selected { background: var(--accent-soft); border-color: #167b70; }
+.venue-market-list button > span { min-width: 0; }
+.venue-market-list button strong, .venue-market-list button small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.venue-market-list button strong { font: 700 8px var(--font-geist-mono), monospace; }
+.venue-market-list button small { margin-top: 2px; color: var(--muted); font-size: 7px; }
+.venue-market-list .venue-touch { text-align: right; }
+.selected-market-heading { padding: 7px 8px 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 7px; font-weight: 800; letter-spacing: .07em; }
+.selected-market-heading strong { color: var(--ink); font: 700 8px var(--font-geist-mono), monospace; }
 .top-of-book { padding: 8px; display: grid; grid-template-columns: 1fr 1fr .8fr; gap: 5px; border-bottom: 1px solid var(--border); }
 .top-of-book > div { min-width: 0; padding: 6px; background: #061019; border: 1px solid var(--border); }
 .top-of-book small { display: block; color: var(--muted); font-size: 7px; letter-spacing: .06em; }

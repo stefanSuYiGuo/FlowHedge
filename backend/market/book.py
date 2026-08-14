@@ -129,6 +129,7 @@ class KrakenOrderBookBuilder:
             exchange_timestamp=self._exchange_timestamp,
             received_at=self._received_at,
             checksum=self._checksum,
+            source_sequence=None,
         )
 
     @staticmethod

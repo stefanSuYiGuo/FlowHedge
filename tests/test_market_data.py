@@ -7,13 +7,30 @@ from pathlib import Path
 import pytest
 
 from backend.market.book import KrakenChecksumMismatch, KrakenOrderBookBuilder
+from backend.market.coinbase import (
+    BOOK_DEPTH as COINBASE_BOOK_DEPTH,
+    CANONICAL_SYMBOL as COINBASE_CANONICAL_SYMBOL,
+    COINBASE_FEED_ID,
+    COINBASE_MARKET_WS_ENDPOINT,
+    COINBASE_PERP_PRODUCT,
+    CoinbaseMarketDataAdapter,
+    PRODUCT_SPECS,
+    STABLECOIN_USD_ASSUMPTION,
+    instrument_rules_from_product,
+    parse_coinbase_timestamp,
+)
 from backend.market.kraken import (
     BOOK_DEPTH,
     CANONICAL_SYMBOL,
-    KRAKEN_SPOT_WS_ENDPOINT,
     KrakenSpotMarketDataAdapter,
+    KRAKEN_SPOT_WS_ENDPOINT,
 )
-from backend.market.models import MarketConnectionStatus, MarketVenue
+from backend.domain.models import InstrumentType
+from backend.market.models import (
+    ContractStructure,
+    MarketConnectionStatus,
+    MarketVenue,
+)
 from backend.market.store import InMemoryMarketStateStore
 
 
@@ -30,7 +47,12 @@ def load_fixture(name: str) -> dict:
 
 async def registered_store() -> InMemoryMarketStateStore:
     store = InMemoryMarketStateStore()
-    await store.register_venue(MarketVenue.KRAKEN, KRAKEN_SPOT_WS_ENDPOINT)
+    await store.register_feed(
+        KrakenSpotMarketDataAdapter.feed_id,
+        MarketVenue.KRAKEN,
+        KRAKEN_SPOT_WS_ENDPOINT,
+        ((CANONICAL_SYMBOL, InstrumentType.SPOT),),
+    )
     return store
 
 
@@ -111,3 +133,155 @@ def test_in_memory_state_replaces_current_book_without_accumulating_history() ->
     assert len(store._books) == 1
     assert state.book_data_age_ms is not None
     assert state.book_data_age_ms < 1000
+
+
+def test_coinbase_public_l2_normalizes_spot_and_perp_without_identity_collision() -> None:
+    async def exercise():
+        store = InMemoryMarketStateStore()
+        await store.register_feed(
+            COINBASE_FEED_ID,
+            MarketVenue.COINBASE,
+            COINBASE_MARKET_WS_ENDPOINT,
+            CoinbaseMarketDataAdapter.markets,
+        )
+        adapter = CoinbaseMarketDataAdapter(store)
+        now = datetime.now(timezone.utc)
+        await adapter.handle_message(
+            load_fixture("coinbase_l2_snapshot.json"), received_at=now
+        )
+        spot = await store.view(
+            MarketVenue.COINBASE,
+            COINBASE_CANONICAL_SYMBOL,
+            InstrumentType.SPOT,
+        )
+        perp = await store.view(
+            MarketVenue.COINBASE,
+            COINBASE_CANONICAL_SYMBOL,
+            InstrumentType.PERPETUAL,
+        )
+        return store, spot, perp
+
+    store, spot, perp = run(exercise())
+
+    assert len(store._books) == 2
+    assert spot.eligible is True
+    assert perp.eligible is True
+    assert spot.book is not None and perp.book is not None
+    assert spot.book.venue_symbol == "BTC-USD"
+    assert spot.book.best_bid == Decimal("62920.84")
+    assert spot.book.best_ask == Decimal("62920.85")
+    assert perp.book.venue_symbol == "BTC-PERP-INTX"
+    assert perp.book.instrument_type is InstrumentType.PERPETUAL
+    assert perp.book.best_bid == Decimal("62935.4")
+    assert perp.book.best_ask == Decimal("62935.5")
+    assert perp.book.depth == COINBASE_BOOK_DEPTH
+    assert perp.book.checksum is None
+    assert perp.book.source_sequence == 17
+
+
+def test_coinbase_perp_metadata_preserves_contract_and_usdc_assumption() -> None:
+    products = load_fixture("coinbase_products.json")
+    rules = instrument_rules_from_product(
+        products[COINBASE_PERP_PRODUCT],
+        PRODUCT_SPECS[COINBASE_PERP_PRODUCT],
+        received_at=datetime.now(timezone.utc),
+    )
+
+    assert rules.instrument_type is InstrumentType.PERPETUAL
+    assert rules.base_asset == "BTC"
+    assert rules.quote_asset == "USDC"
+    assert rules.settlement_asset == "USDC"
+    assert rules.contract_structure is ContractStructure.LINEAR
+    assert rules.contract_multiplier == Decimal("1")
+    assert rules.price_increment == Decimal("0.1")
+    assert rules.quantity_increment == Decimal("0.0001")
+    assert rules.usd_conversion_rate == Decimal("1")
+    assert rules.usd_conversion_assumption == STABLECOIN_USD_ASSUMPTION
+    assert not hasattr(rules, "funding_rate")
+
+
+def test_coinbase_timestamp_accepts_variable_subsecond_precision() -> None:
+    assert parse_coinbase_timestamp(
+        "2026-08-14T08:14:43.1269Z"
+    ) == datetime(2026, 8, 14, 8, 14, 43, 126900, tzinfo=timezone.utc)
+
+
+def test_unified_snapshot_is_atomic_and_marks_stale_books_ineligible() -> None:
+    async def exercise():
+        store = InMemoryMarketStateStore()
+        await store.register_feed(
+            COINBASE_FEED_ID,
+            MarketVenue.COINBASE,
+            COINBASE_MARKET_WS_ENDPOINT,
+            CoinbaseMarketDataAdapter.markets,
+        )
+        adapter = CoinbaseMarketDataAdapter(store)
+        stale_received_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        await adapter.handle_message(
+            load_fixture("coinbase_l2_snapshot.json"),
+            received_at=stale_received_at,
+        )
+        return await store.snapshot("BTC")
+
+    snapshot = run(exercise())
+
+    assert snapshot.snapshot_version > 0
+    assert snapshot.base_asset == "BTC"
+    assert len(snapshot.markets) == 2
+    assert {
+        (market.venue, market.instrument_type) for market in snapshot.markets
+    } == {
+        (MarketVenue.COINBASE, InstrumentType.SPOT),
+        (MarketVenue.COINBASE, InstrumentType.PERPETUAL),
+    }
+    assert all(market.eligible is False for market in snapshot.markets)
+    assert all(
+        market.connection.status is MarketConnectionStatus.STALE
+        for market in snapshot.markets
+    )
+    assert all(market.exclusion_reason == "FEED_STALE" for market in snapshot.markets)
+
+
+def test_coinbase_channel_sequence_is_retained_without_assuming_contiguity() -> None:
+    async def exercise():
+        store = InMemoryMarketStateStore()
+        await store.register_feed(
+            COINBASE_FEED_ID,
+            MarketVenue.COINBASE,
+            COINBASE_MARKET_WS_ENDPOINT,
+            CoinbaseMarketDataAdapter.markets,
+        )
+        adapter = CoinbaseMarketDataAdapter(store)
+        now = datetime.now(timezone.utc)
+        snapshot_message = load_fixture("coinbase_l2_snapshot.json")
+        await adapter.handle_message(snapshot_message, received_at=now)
+        gap_message = {
+            "channel": "l2_data",
+            "sequence_num": snapshot_message["sequence_num"] + 2,
+            "events": [
+                {
+                    "type": "update",
+                    "product_id": COINBASE_PERP_PRODUCT,
+                    "updates": [
+                        {
+                            "side": "bid",
+                            "event_time": "2026-08-14T07:55:16.1000Z",
+                            "price_level": "62935.4",
+                            "new_quantity": "9.0000",
+                        }
+                    ],
+                }
+            ],
+        }
+        await adapter.handle_message(gap_message, received_at=now)
+        after = await store.view(
+            MarketVenue.COINBASE,
+            COINBASE_CANONICAL_SYMBOL,
+            InstrumentType.PERPETUAL,
+        )
+        return after.book
+
+    after = run(exercise())
+    assert after is not None
+    assert after.source_sequence == 19
+    assert after.bids[0].quantity == Decimal("9.0000")

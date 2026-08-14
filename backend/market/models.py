@@ -14,6 +14,13 @@ from ..domain.models import InstrumentType
 
 class MarketVenue(str, Enum):
     KRAKEN = "KRAKEN"
+    COINBASE = "COINBASE"
+
+
+class ContractStructure(str, Enum):
+    SPOT = "SPOT"
+    LINEAR = "LINEAR"
+    INVERSE = "INVERSE"
 
 
 class MarketConnectionStatus(str, Enum):
@@ -46,6 +53,11 @@ class InstrumentRules(BaseModel):
     price_precision: int = Field(ge=0)
     quantity_precision: int = Field(ge=0)
     status: str
+    contract_structure: ContractStructure = ContractStructure.SPOT
+    contract_multiplier: Decimal = Field(default=Decimal("1"), gt=0)
+    settlement_asset: str = "USD"
+    usd_conversion_rate: Decimal = Field(default=Decimal("1"), gt=0)
+    usd_conversion_assumption: Optional[str] = None
     received_at: datetime
 
 
@@ -68,7 +80,8 @@ class NormalizedOrderBook(BaseModel):
     spread_bps: Decimal = Field(ge=0)
     exchange_timestamp: datetime
     received_at: datetime
-    checksum: int = Field(ge=0)
+    checksum: Optional[int] = Field(default=None, ge=0)
+    source_sequence: Optional[int] = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def levels_and_derived_values_must_reconcile(self) -> "NormalizedOrderBook":
@@ -100,6 +113,7 @@ class NormalizedOrderBook(BaseModel):
 class MarketConnectionState(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    feed_id: str
     venue: MarketVenue
     status: MarketConnectionStatus
     endpoint: str
@@ -115,8 +129,22 @@ class MarketStateView(BaseModel):
 
     venue: MarketVenue
     symbol: str
+    instrument_type: InstrumentType
     connection: MarketConnectionState
     book: Optional[NormalizedOrderBook]
     instrument: Optional[InstrumentRules]
     book_data_age_ms: Optional[int] = Field(default=None, ge=0)
+    eligible: bool
+    exclusion_reason: Optional[str] = None
     as_of: datetime
+
+
+class UnifiedMarketSnapshot(BaseModel):
+    """One atomic, versioned read of all normalized markets for an asset."""
+
+    model_config = ConfigDict(frozen=True)
+
+    snapshot_version: int = Field(ge=0)
+    captured_at: datetime
+    base_asset: str
+    markets: tuple[MarketStateView, ...]

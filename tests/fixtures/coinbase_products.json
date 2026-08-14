@@ -1,0 +1,33 @@
+{
+  "BTC-USD": {
+    "product_id": "BTC-USD",
+    "base_increment": "0.00000001",
+    "quote_increment": "0.01",
+    "base_min_size": "0.00000001",
+    "base_currency_id": "BTC",
+    "quote_currency_id": "USD",
+    "price_increment": "0.01",
+    "status": "online",
+    "product_type": "SPOT"
+  },
+  "BTC-PERP-INTX": {
+    "product_id": "BTC-PERP-INTX",
+    "base_increment": "0.0001",
+    "quote_increment": "0.1",
+    "base_min_size": "0.0001",
+    "base_currency_id": "",
+    "quote_currency_id": "USDC",
+    "price_increment": "0.1",
+    "status": "STANDARD",
+    "product_type": "FUTURE",
+    "future_product_details": {
+      "contract_code": "BTC",
+      "contract_size": "1",
+      "contract_expiry_type": "PERPETUAL",
+      "perpetual_details": {
+        "funding_rate": "0.000011",
+        "funding_interval": "3600s"
+      }
+    }
+  }
+}

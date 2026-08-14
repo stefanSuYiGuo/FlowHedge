@@ -56,6 +56,11 @@ export interface InstrumentRules {
   price_precision: number;
   quantity_precision: number;
   status: string;
+  contract_structure: "SPOT" | "LINEAR" | "INVERSE";
+  contract_multiplier: string;
+  settlement_asset: string;
+  usd_conversion_rate: string;
+  usd_conversion_assumption: string | null;
   received_at: string;
 }
 
@@ -74,10 +79,12 @@ export interface NormalizedOrderBook {
   spread_bps: string;
   exchange_timestamp: string;
   received_at: string;
-  checksum: number;
+  checksum: number | null;
+  source_sequence: number | null;
 }
 
 export interface MarketConnectionState {
+  feed_id: string;
   venue: string;
   status: MarketConnectionStatus;
   endpoint: string;
@@ -91,11 +98,21 @@ export interface MarketConnectionState {
 export interface MarketStateView {
   venue: string;
   symbol: string;
+  instrument_type: "SPOT" | "PERPETUAL";
   connection: MarketConnectionState;
   book: NormalizedOrderBook | null;
   instrument: InstrumentRules | null;
   book_data_age_ms: number | null;
+  eligible: boolean;
+  exclusion_reason: string | null;
   as_of: string;
+}
+
+export interface UnifiedMarketSnapshot {
+  snapshot_version: number;
+  captured_at: string;
+  base_asset: string;
+  markets: MarketStateView[];
 }
 
 export interface MarketSnapshot {
