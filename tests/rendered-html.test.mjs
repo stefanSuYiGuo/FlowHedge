@@ -37,6 +37,7 @@ test("server-renders the FlowHedge terminal shell", async () => {
   assert.match(html, /Waiting for institutional flow/);
   assert.match(html, /introduce valid institutional RFQs asynchronously/);
   assert.doesNotMatch(html, /INJECT RFQ/);
+  assert.doesNotMatch(html, /value="0\.10"/);
   assert.doesNotMatch(html, /\+\$9,390|YELLOW · PARTIAL HEDGE/);
   assert.doesNotMatch(html, /FUTURE STEP/);
   assert.doesNotMatch(html, /Next client RFQ|countdown|codex-preview/i);

@@ -46,8 +46,8 @@ export default function Home() {
   const [events, setEvents] = useState<FlowEvent[]>([]);
   const [hedgeOrders, setHedgeOrders] = useState<HedgeOrder[]>([]);
   const [hedgeFills, setHedgeFills] = useState<HedgeFill[]>([]);
-  const [spotAllocation, setSpotAllocation] = useState("0.10");
-  const [perpAllocation, setPerpAllocation] = useState("0.00");
+  const [spotAllocation, setSpotAllocation] = useState("");
+  const [perpAllocation, setPerpAllocation] = useState("");
   const [busy, setBusy] = useState(false);
   const [apiState, setApiState] = useState<"connecting" | "online" | "offline">(
     "connecting",
@@ -70,22 +70,6 @@ export default function Home() {
     setPendingRfqs(workspace.client_flow.pending_rfqs);
     setCompletedFlowCount(workspace.client_flow.completed_count);
     setFlowActive(workspace.client_flow.active);
-    const currentOrder = workspace.hedge_orders.find(
-      (order) => order.status !== "FILLED",
-    );
-    if (currentOrder) {
-      const currentBatch = workspace.hedge_orders.filter(
-        (order) => order.batch_id === currentOrder.batch_id,
-      );
-      const currentSpotQuantity = currentBatch
-        .filter((order) => order.instrument_type === "SPOT")
-        .reduce((sum, order) => sum + Number(order.quantity_btc), 0);
-      const currentPerpQuantity = currentBatch
-        .filter((order) => order.instrument_type === "PERPETUAL")
-        .reduce((sum, order) => sum + Number(order.quantity_btc), 0);
-      setSpotAllocation(currentSpotQuantity.toFixed(2));
-      setPerpAllocation(currentPerpQuantity.toFixed(2));
-    }
   }, []);
 
   useEffect(() => {
@@ -180,13 +164,13 @@ export default function Home() {
   const demoHedgeQuantity = hedgeOrdersCreated
     ? activeBatchOrders.reduce((sum, order) => sum + Number(order.quantity_btc), 0)
     : Math.abs(totalDelta);
-  const hasValidSpotPrecision = /^\d+(?:\.\d{0,2})?$/.test(spotAllocation);
-  const hasValidPerpPrecision = /^\d+(?:\.\d{0,2})?$/.test(perpAllocation);
+  const hasValidSpotPrecision = /^(?:\d+(?:\.\d{0,2})?)?$/.test(spotAllocation);
+  const hasValidPerpPrecision = /^(?:\d+(?:\.\d{0,2})?)?$/.test(perpAllocation);
   const spotAllocationNumber = hasValidSpotPrecision
-    ? Number(spotAllocation)
+    ? Number(spotAllocation || "0")
     : Number.NaN;
   const perpAllocationNumber = hasValidPerpPrecision
-    ? Number(perpAllocation)
+    ? Number(perpAllocation || "0")
     : Number.NaN;
   const spotQuantityIsValid =
     Number.isFinite(spotAllocationNumber) && spotAllocationNumber >= 0;
@@ -282,8 +266,8 @@ export default function Home() {
       setEvents([]);
       setHedgeOrders([]);
       setHedgeFills([]);
-      setSpotAllocation("0.10");
-      setPerpAllocation("0.00");
+      setSpotAllocation("");
+      setPerpAllocation("");
       setApiState("online");
     } catch {
       setApiState("offline");
@@ -307,11 +291,13 @@ export default function Home() {
 
     try {
       await createManualHedgeOrders(
-        spotAllocation,
-        perpAllocation,
+        spotAllocation || "0",
+        perpAllocation || "0",
         `manual-hedge-v${deskState.version}-${Date.now()}`,
       );
       await refreshHedgeState();
+      setSpotAllocation("");
+      setPerpAllocation("");
       setApiState("online");
       setNotice(
         "Hedge orders created — actual delta is unchanged until simulated fills arrive.",
@@ -716,7 +702,7 @@ export default function Home() {
                       type="number"
                       value={spotAllocation}
                       onBlur={() => {
-                        if (spotQuantityIsValid) {
+                        if (spotAllocation !== "" && spotQuantityIsValid) {
                           setSpotAllocation(spotAllocationNumber.toFixed(2));
                         }
                       }}
@@ -744,7 +730,7 @@ export default function Home() {
                       type="number"
                       value={perpAllocation}
                       onBlur={() => {
-                        if (perpQuantityIsValid) {
+                        if (perpAllocation !== "" && perpQuantityIsValid) {
                           setPerpAllocation(perpAllocationNumber.toFixed(2));
                         }
                       }}
