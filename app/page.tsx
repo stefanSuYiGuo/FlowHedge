@@ -145,8 +145,16 @@ export default function Home() {
   const selectedMarketStatus = marketPollFailed
     ? "DISCONNECTED"
     : (selectedMarketState?.connection.status ?? "CONNECTING");
+  const selectedMarketMidPrice = selectedBook
+    ? Number(selectedBook.mid_price)
+    : null;
+  const selectedMarketPair = selectedMarketState?.instrument
+    ? `${selectedMarketState.instrument.base_asset} / ${selectedMarketState.instrument.quote_asset}`
+    : "BTC / USD";
+  const selectedMarketLabel = selectedMarketState
+    ? `${selectedMarketState.venue} ${selectedMarketState.instrument_type === "PERPETUAL" ? "PERP" : "SPOT"}`
+    : "MARKET LOADING";
   const liveBook = krakenSpotState?.book ?? null;
-  const liveMidPrice = liveBook ? Number(liveBook.mid_price) : null;
   const marketStatus = marketPollFailed
     ? "DISCONNECTED"
     : (krakenSpotState?.connection.status ?? "CONNECTING");
@@ -408,11 +416,11 @@ export default function Home() {
         </div>
 
         <div className="ticker-block">
-          <span className="eyebrow">BTC / USD</span>
-          <strong>{liveMidPrice === null ? "—" : formatUsd(liveMidPrice)}</strong>
-          <span className="live-market-label">KRAKEN SPOT</span>
-          <span className={`market-status market-status-${marketStatus.toLowerCase()}`}>
-            {marketStatus}
+          <span className="eyebrow">{selectedMarketPair}</span>
+          <strong>{selectedMarketMidPrice === null ? "—" : formatUsd(selectedMarketMidPrice)}</strong>
+          <span className="live-market-label">{selectedMarketLabel}</span>
+          <span className={`market-status market-status-${selectedMarketStatus.toLowerCase()}`}>
+            {selectedMarketStatus}
           </span>
         </div>
 
@@ -475,6 +483,7 @@ export default function Home() {
         <aside className="left-rail">
           <Panel
             title="Live Market Data · Multi-Venue"
+            className="market-data-panel"
             meta={marketSnapshot
               ? `SNAPSHOT v${marketSnapshot.snapshot_version} · ${marketStates.filter((market) => market.eligible).length}/${marketStates.length} ELIGIBLE`
               : "CONNECTING"}
@@ -495,7 +504,7 @@ export default function Home() {
                         onClick={() => setSelectedMarketId(identity)}
                         type="button"
                       >
-                        <span>
+                        <span className="venue-identity">
                           <strong>{market.venue}</strong>
                           <small>
                             {market.instrument_type === "PERPETUAL" ? "PERP" : "SPOT"}
@@ -592,6 +601,7 @@ export default function Home() {
 
           <Panel
             title="RFQ Inbox"
+            className="rfq-inbox-panel"
             meta={`${pendingRfqs.length} pricing · ${completedFlowCount} filled`}
             grow
           >
@@ -1008,8 +1018,20 @@ export default function Home() {
   );
 }
 
-function Panel({ title, meta, children, grow = false }: { title: string; meta: string; children: React.ReactNode; grow?: boolean }) {
-  return <section className={`panel ${grow ? "panel-grow" : ""}`}><header><h2>{title}</h2><span>{meta}</span></header>{children}</section>;
+function Panel({
+  title,
+  meta,
+  children,
+  grow = false,
+  className = "",
+}: {
+  title: string;
+  meta: string;
+  children: React.ReactNode;
+  grow?: boolean;
+  className?: string;
+}) {
+  return <section className={`panel ${grow ? "panel-grow" : ""} ${className}`.trim()}><header><h2>{title}</h2><span>{meta}</span></header>{children}</section>;
 }
 
 function Metric({ label, value, tone }: { label: string; value: string; tone?: "positive" | "warning" }) {

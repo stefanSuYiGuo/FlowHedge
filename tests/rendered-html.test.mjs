@@ -24,7 +24,7 @@ test("server-renders the FlowHedge terminal shell", async () => {
   assert.match(html, /Hedge Decision Workspace · Simulated Execution/);
   assert.match(html, /Live Market Data · Multi-Venue/);
   assert.match(html, /Kraken, Coinbase, and OKX public adapters/);
-  assert.match(html, /KRAKEN SPOT/);
+  assert.match(html, /MARKET LOADING/);
   assert.match(html, /Demo Client Quote · Active RFQ/);
   assert.match(html, /RFQ Inbox/);
   assert.match(html, /Orders arrive asynchronously/);

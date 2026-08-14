@@ -11,7 +11,7 @@ remain deferred.
 
 ## Current layout
 
-- **Header:** instrument, live Kraken Spot mid-price, independent API/market connectivity, and manual/auto hedge mode.
+- **Header:** the currently selected market and its live mid-price, independent API/market connectivity, and manual/auto hedge mode.
 - **Desk strip:** actual, working, and projected delta plus Spot and derivative positions.
 - **Left rail:** selectable Kraken/Coinbase/OKX Spot and Perp compact books, derivatives context, multi-order RFQ inbox, and backend flow pause/resume controls.
 - **Center stage:** pending/accepted demo client quotes, live-but-not-optimized Kraken hedge reference, manual hedge allocation and simulated fill controls, and event tape.
