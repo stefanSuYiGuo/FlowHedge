@@ -21,11 +21,14 @@ test("server-renders the FlowHedge terminal shell", async () => {
   const html = await response.text();
   assert.match(html, /<title>FlowHedge — Institutional Crypto Sales Trading<\/title>/i);
   assert.match(html, /FLOWHEDGE/);
-  assert.match(html, /Hedge Decision Workspace/);
+  assert.match(html, /Hedge Decision Workspace · Simulated Execution/);
+  assert.match(html, /Live Market Data · Kraken/);
+  assert.match(html, /KRAKEN SPOT/);
+  assert.match(html, /Demo Client Quote · Active RFQ/);
   assert.match(html, /RFQ Inbox/);
   assert.match(html, /Orders arrive asynchronously/);
   assert.match(html, /RISK POLICY NOT CONFIGURED/);
-  assert.match(html, /MANUAL MODE · STEP 4/);
+  assert.match(html, /MANUAL MODE · STEP 5/);
   assert.match(html, /No exposure to hedge/);
   assert.match(html, /PnL accounting unavailable/);
   assert.match(html, /No hedge orders/);

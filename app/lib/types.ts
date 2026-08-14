@@ -15,6 +15,12 @@ export type QuoteStatus =
 export type HedgeOrderOrigin = "MANUAL";
 export type HedgeSide = "BUY" | "SELL" | "LONG" | "SHORT";
 export type HedgeOrderStatus = "OPEN" | "PARTIALLY_FILLED" | "FILLED";
+export type MarketConnectionStatus =
+  | "CONNECTING"
+  | "LIVE"
+  | "STALE"
+  | "DISCONNECTED"
+  | "RECONNECTING";
 export type JsonValue =
   | string
   | number
@@ -30,6 +36,66 @@ export interface MarketObservation {
   bid: string;
   ask: string;
   observed_at: string;
+}
+
+export interface MarketLevel {
+  price: string;
+  quantity: string;
+}
+
+export interface InstrumentRules {
+  venue: string;
+  symbol: string;
+  venue_symbol: string;
+  instrument_type: "SPOT" | "PERPETUAL";
+  base_asset: string;
+  quote_asset: string;
+  price_increment: string;
+  quantity_increment: string;
+  quantity_min: string;
+  price_precision: number;
+  quantity_precision: number;
+  status: string;
+  received_at: string;
+}
+
+export interface NormalizedOrderBook {
+  venue: string;
+  symbol: string;
+  venue_symbol: string;
+  instrument_type: "SPOT" | "PERPETUAL";
+  depth: number;
+  bids: MarketLevel[];
+  asks: MarketLevel[];
+  best_bid: string;
+  best_ask: string;
+  mid_price: string;
+  spread: string;
+  spread_bps: string;
+  exchange_timestamp: string;
+  received_at: string;
+  checksum: number;
+}
+
+export interface MarketConnectionState {
+  venue: string;
+  status: MarketConnectionStatus;
+  endpoint: string;
+  connected_at: string | null;
+  last_message_at: string | null;
+  last_book_update_at: string | null;
+  last_error: string | null;
+  reconnect_attempt: number;
+}
+
+export interface MarketStateView {
+  venue: string;
+  symbol: string;
+  connection: MarketConnectionState;
+  book: NormalizedOrderBook | null;
+  instrument: InstrumentRules | null;
+  book_data_age_ms: number | null;
+  as_of: string;
 }
 
 export interface MarketSnapshot {

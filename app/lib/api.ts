@@ -7,6 +7,7 @@ import type {
   HedgeFillResult,
   HedgeOrder,
   HedgeOrderBatchResult,
+  MarketStateView,
 } from "./types";
 
 const configuredBaseUrl = process.env.NEXT_PUBLIC_FLOWHEDGE_API_URL;
@@ -79,6 +80,15 @@ export function getHedgeOrders(): Promise<HedgeOrder[]> {
 
 export function getHedgeFills(): Promise<HedgeFill[]> {
   return request<HedgeFill[]>("/demo/hedge-fills");
+}
+
+export function getMarketState(
+  venue: string,
+  symbol: string,
+): Promise<MarketStateView> {
+  return request<MarketStateView>(
+    `/market/books/${encodeURIComponent(venue)}/${encodeURIComponent(symbol)}`,
+  );
 }
 
 export function createManualHedgeOrders(

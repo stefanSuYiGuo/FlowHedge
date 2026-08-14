@@ -3,16 +3,17 @@
 FlowHedge is an institutional crypto sales-trading simulator. The current
 checkpoint contains the reviewable trading-terminal layout and a deterministic
 backend accounting chain from RFQ through client fill, manual Spot/Perp hedge
-orders, simulated fills, and desk-state updates. Exchange connectivity,
-production pricing, hedge optimization, risk policy, and PnL logic remain
+orders, simulated fills, and desk-state updates. It also consumes Kraken's
+public BTC/USD Spot order book through a venue-neutral market-data layer.
+Production pricing, hedge optimization, risk policy, and PnL logic remain
 deferred.
 
 ## Current layout
 
-- **Header:** instrument, reference price, venue connectivity, and manual/auto hedge mode.
+- **Header:** instrument, live Kraken Spot mid-price, independent API/market connectivity, and manual/auto hedge mode.
 - **Desk strip:** actual, working, and projected delta plus Spot and derivative positions.
-- **Left rail:** fixed market fixture, asynchronous RFQ inbox, flow pause/resume, and manual RFQ injection.
-- **Center stage:** active RFQ, accepted quote, manual hedge allocation and fill controls, and event tape.
+- **Left rail:** live Kraken depth-25 book, asynchronous RFQ inbox, flow pause/resume, and manual RFQ injection.
+- **Center stage:** fixture client quote, live-but-not-optimized Kraken hedge reference, manual hedge allocation and simulated fill controls, and event tape.
 - **Right rail:** reconciled desk positions, deferred PnL, and the hedge order/fill blotter.
 
 No countdown or prediction of the next client RFQ is shown. Orders are modeled
@@ -49,6 +50,9 @@ Then open:
 - Interactive API documentation: <http://localhost:8000/docs>
 
 The frontend reads demo state and actions from this API.
+
+The Kraken adapter uses public market data only. No account, API key, or real
+order permission is required.
 
 ## Step 2 accounting demo
 
@@ -108,6 +112,36 @@ submitted hedge totals `+5 BTC`.
 The zero target is a labeled demo assumption, not a Risk Policy output. Manual
 allocation is not presented as a Hedge Optimizer recommendation, and the fixed
 fill prices and fill controls are not real market execution.
+
+## Step 5 Kraken public market data
+
+FastAPI starts a Kraken Spot WebSocket v2 adapter with its application
+lifecycle and subscribes to the public `BTC/USD` level-2 book at depth 25 plus
+instrument metadata. Every exchange update is applied in event order and
+validated with Kraken's top-10 CRC32 checksum before it can replace the latest
+normalized book.
+
+- `GET /market/books/KRAKEN/BTC-USD` returns the latest book, instrument rules,
+  data age, and connection state.
+- `GET /market/connections` returns venue-adapter connection states.
+- The backend marks connecting, live, stale, disconnected, and reconnecting
+  states and retries with bounded backoff after a connection failure.
+- The frontend polls the latest backend view every 250ms. It does not request
+  Kraken directly.
+- In-memory market state is bounded to the current book and metadata for each
+  venue/symbol. It stores no historical tick stream and does not grow with the
+  number of updates.
+
+The live Kraken best ask can be displayed as a manual Spot market candidate,
+but it is explicitly not a hedge recommendation and does not change the fixed
+client quote or simulated fill accounting. The adapter interface, canonical
+symbols, normalized models, registry, and keyed state store leave room for
+additional venues and instruments without coupling them to the UI.
+
+This step intentionally does not include a second venue, Kraken Futures/Perp,
+private API keys, real orders, Risk Policy, Hedge Optimizer, smart order
+routing, Pricing Engine, fees, funding, margin, PnL, or historical market-data
+storage.
 
 ## Validate
 

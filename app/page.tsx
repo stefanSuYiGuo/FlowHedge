@@ -10,6 +10,7 @@ import {
   getEvents,
   getHedgeFills,
   getHedgeOrders,
+  getMarketState,
   resetDemo,
   runDemoClientTrade,
   simulateHedgeFill,
@@ -20,6 +21,7 @@ import type {
   FlowEvent,
   HedgeFill,
   HedgeOrder,
+  MarketStateView,
 } from "./lib/types";
 
 type TradingMode = "manual" | "auto";
@@ -54,6 +56,8 @@ export default function Home() {
   );
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [marketState, setMarketState] = useState<MarketStateView | null>(null);
+  const [marketPollFailed, setMarketPollFailed] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -102,13 +106,46 @@ export default function Home() {
     };
   }, []);
 
-  const referencePrice = scenario
+  useEffect(() => {
+    let active = true;
+    let pollTimer: number | undefined;
+
+    async function pollKrakenMarket() {
+      try {
+        const latestMarketState = await getMarketState("KRAKEN", "BTC-USD");
+        if (!active) return;
+        setMarketState(latestMarketState);
+        setMarketPollFailed(false);
+      } catch {
+        if (!active) return;
+        setMarketPollFailed(true);
+      } finally {
+        if (active) {
+          pollTimer = window.setTimeout(pollKrakenMarket, 250);
+        }
+      }
+    }
+
+    void pollKrakenMarket();
+    return () => {
+      active = false;
+      if (pollTimer !== undefined) window.clearTimeout(pollTimer);
+    };
+  }, []);
+
+  const scenarioReferencePrice = scenario
     ? Number(scenario.market_snapshot.reference_price_usd)
     : null;
+  const liveBook = marketState?.book ?? null;
+  const liveMidPrice = liveBook ? Number(liveBook.mid_price) : null;
+  const marketStatus = marketPollFailed
+    ? "DISCONNECTED"
+    : (marketState?.connection.status ?? "CONNECTING");
   const totalDelta = Number(deskState.total_delta_btc);
   const workingDelta = Number(deskState.working_order_delta_btc);
   const projectedDelta = totalDelta + workingDelta;
-  const deltaNotional = referencePrice === null ? null : totalDelta * referencePrice;
+  const deltaNotional =
+    scenarioReferencePrice === null ? null : totalDelta * scenarioReferencePrice;
   const demoHedgeQuantity = scenario
     ? Math.abs(Number(scenario.desk_state_after.total_delta_btc))
     : 0;
@@ -323,8 +360,11 @@ export default function Home() {
 
         <div className="ticker-block">
           <span className="eyebrow">BTC / USD</span>
-          <strong>{referencePrice === null ? "—" : formatUsd(referencePrice)}</strong>
-          <span className="fixture-label">FIXTURE</span>
+          <strong>{liveMidPrice === null ? "—" : formatUsd(liveMidPrice)}</strong>
+          <span className="live-market-label">KRAKEN SPOT</span>
+          <span className={`market-status market-status-${marketStatus.toLowerCase()}`}>
+            {marketStatus}
+          </span>
         </div>
 
         <div className={`connection-state ${apiState === "offline" ? "offline" : ""}`}>
@@ -372,25 +412,50 @@ export default function Home() {
       <section className="workspace-grid">
         <aside className="left-rail">
           <Panel
-            title="Market Snapshot"
-            meta={scenario ? `v${scenario.market_snapshot.version}` : "awaiting fixture"}
+            title="Live Market Data · Kraken"
+            meta={marketBookMeta(marketState, marketStatus)}
           >
-            {scenario ? (
-              <table className="market-table">
-                <thead><tr><th>VENUE</th><th>TYPE</th><th>BID</th><th>ASK</th></tr></thead>
-                <tbody>
-                  {scenario.market_snapshot.observations.map((observation) => (
-                    <tr key={`${observation.venue}-${observation.instrument_id}`}>
-                      <td>{observation.venue}</td>
-                      <td>{observation.instrument_type}</td>
-                      <td className="bid">{formatUsd(Number(observation.bid))}</td>
-                      <td className="ask">{formatUsd(Number(observation.ask))}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            {liveBook ? (
+              <div className="live-market-panel">
+                <div className="top-of-book">
+                  <div><small>BEST BID</small><strong className="bid">{formatUsd(Number(liveBook.best_bid))}</strong></div>
+                  <div><small>BEST ASK</small><strong className="ask">{formatUsd(Number(liveBook.best_ask))}</strong></div>
+                  <div><small>SPREAD</small><strong>{Number(liveBook.spread_bps).toFixed(2)} bps</strong></div>
+                </div>
+                <table className="market-table order-book-table">
+                  <thead><tr><th>BID QTY</th><th>BID</th><th>ASK</th><th>ASK QTY</th></tr></thead>
+                  <tbody>
+                    {liveBook.bids.slice(0, 5).map((bidLevel, index) => {
+                      const askLevel = liveBook.asks[index];
+                      return (
+                        <tr key={`${bidLevel.price}-${askLevel?.price ?? index}`}>
+                          <td>{formatBookQuantity(Number(bidLevel.quantity))}</td>
+                          <td className="bid">{formatUsd(Number(bidLevel.price))}</td>
+                          <td className="ask">{askLevel ? formatUsd(Number(askLevel.price)) : "—"}</td>
+                          <td>{askLevel ? formatBookQuantity(Number(askLevel.quantity)) : "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <div className="market-metadata">
+                  <span>BOOK L2 · DEPTH {liveBook.depth}</span>
+                  <span>CRC {liveBook.checksum}</span>
+                  <span>
+                    {marketState?.instrument
+                      ? `TICK ${marketState.instrument.price_increment} · MIN ${marketState.instrument.quantity_min} BTC`
+                      : "INSTRUMENT METADATA LOADING"}
+                  </span>
+                </div>
+              </div>
             ) : (
-              <EmptyState title="No market snapshot" detail="Inject the fixed RFQ to load the Step 3 fixture." />
+              <EmptyState
+                title={marketStatus === "DISCONNECTED" ? "Kraken disconnected" : "Waiting for Kraken book"}
+                detail={
+                  marketState?.connection.last_error ??
+                  "The public adapter is connecting and validating its first depth-25 snapshot."
+                }
+              />
             )}
           </Panel>
 
@@ -440,7 +505,7 @@ export default function Home() {
         </aside>
 
         <section className="center-stage">
-          <Panel title="Active Client RFQ" meta={activeRfqMeta(stage, scenario)}>
+          <Panel title="Demo Client Quote · Active RFQ" meta={activeRfqMeta(stage, scenario)}>
             {stage === "pricing" ? (
               <div className="active-rfq active-rfq-loading">
                 <div><div className="active-rfq-size">Pricing incoming RFQ</div><p>Notional validation passed before the trade can enter the flow.</p></div>
@@ -481,8 +546,8 @@ export default function Home() {
           </Panel>
 
           <Panel
-            title="Hedge Decision Workspace"
-            meta={mode === "manual" ? "MANUAL MODE · STEP 4" : "AUTO MODE · DEFERRED"}
+            title="Hedge Decision Workspace · Simulated Execution"
+            meta={mode === "manual" ? "MANUAL MODE · STEP 5" : "AUTO MODE · DEFERRED"}
             grow
           >
             {!scenario ? (
@@ -566,6 +631,29 @@ export default function Home() {
                 <p className="demo-policy-note">
                   Enter the editable Spot quantity; the backend calculates the exact Perp remainder. This is an explicit demo target, not a Risk Policy recommendation.
                 </p>
+
+                <div className={`market-candidate ${marketStatus !== "LIVE" ? "unavailable" : ""}`}>
+                  <div className="market-candidate-heading">
+                    <span>LIVE MARKET CANDIDATE · NOT OPTIMIZED</span>
+                    <strong>KRAKEN SPOT</strong>
+                  </div>
+                  {marketStatus === "LIVE" && liveBook ? (
+                    <div className="market-candidate-grid">
+                      <div><small>SIDE</small><strong className="bid">BUY</strong></div>
+                      <div><small>MANUAL SPOT QTY</small><strong>{validAllocation ? `${spotAllocationNumber.toFixed(2)} BTC` : "INVALID"}</strong></div>
+                      <div><small>BEST ASK REFERENCE</small><strong>{formatUsd(Number(liveBook.best_ask))}</strong></div>
+                      <div><small>INDICATIVE NOTIONAL</small><strong>{validAllocation ? formatCompactUsd(spotAllocationNumber * Number(liveBook.best_ask)) : "—"}</strong></div>
+                    </div>
+                  ) : (
+                    <p>
+                      Live execution reference unavailable while Kraken is {marketStatus.toLowerCase()}.
+                      Simulated hedge accounting remains isolated from market connectivity.
+                    </p>
+                  )}
+                  <small className="candidate-disclaimer">
+                    Market reference only — no venue comparison, order routing, optimizer, recommendation, or real order submission.
+                  </small>
+                </div>
 
                 <div className="decision-actions">
                   <button
@@ -697,7 +785,7 @@ export default function Home() {
       </section>
 
       <footer className="terminal-footer">
-        <span>SIMULATION · FIXED MARKET / CLIENT FILL / HEDGE FILLS</span>
+        <span>LIVE MARKET: KRAKEN SPOT · DEMO CLIENT QUOTE · SIMULATED HEDGE EXECUTION</span>
         <span>{flowActive ? "FLOW ACTIVE" : "FLOW PAUSED"} · {mode === "manual" ? "MANUAL HEDGE" : "AUTO DEFERRED"}</span>
       </footer>
     </main>
@@ -733,6 +821,14 @@ function activeRfqMeta(stage: DemoStage, scenario: DemoScenarioResult | null): s
   if (!scenario) return "NO ACTIVE RFQ";
   if (stage === "accepted") return `${scenario.rfq.rfq_id} · QUOTE ACCEPTED`;
   return `${scenario.rfq.rfq_id} · CLIENT FILLED`;
+}
+
+function marketBookMeta(state: MarketStateView | null, status: string): string {
+  if (state?.book_data_age_ms === null || state?.book_data_age_ms === undefined) {
+    return status;
+  }
+  const age = state.book_data_age_ms;
+  return `${status} · ${age < 1000 ? `${age}ms` : `${(age / 1000).toFixed(1)}s`} OLD`;
 }
 
 function describeEvent(event: FlowEvent, scenario: DemoScenarioResult | null): string {
@@ -776,6 +872,13 @@ function apiErrorMessage(error: unknown, fallback: string): string {
 
 function formatQuantity(value: string): string {
   return Number(value).toFixed(2);
+}
+
+function formatBookQuantity(value: number): string {
+  return new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  }).format(value);
 }
 
 function formatBtc(value: number): string {

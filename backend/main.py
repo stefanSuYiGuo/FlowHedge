@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import Optional
 
@@ -30,11 +31,25 @@ from .domain.validation import (
     calculate_notional_usd,
     validate_client_rfq_notional,
 )
+from .market import market_data_service, market_state_store
+from .market.models import MarketConnectionState, MarketStateView, MarketVenue
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Start and stop public market adapters with the API process."""
+
+    await market_data_service.start()
+    try:
+        yield
+    finally:
+        await market_data_service.stop()
 
 app = FastAPI(
     title="FlowHedge API",
     description="Backend API for the institutional crypto sales-trading simulator.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -51,6 +66,39 @@ async def health() -> dict[str, str]:
     """Return a lightweight readiness response for local development."""
 
     return {"status": "ok", "service": "flowhedge-api"}
+
+
+@app.get(
+    "/market/books/{venue}/{symbol}",
+    response_model=MarketStateView,
+    tags=["market-data"],
+)
+async def get_market_book(venue: str, symbol: str) -> MarketStateView:
+    """Return the latest normalized book, metadata, and connection state."""
+
+    try:
+        market_venue = MarketVenue(venue.upper())
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail="unsupported market venue") from error
+
+    canonical_symbol = symbol.upper()
+    if not market_data_service.supports(market_venue, canonical_symbol):
+        raise HTTPException(
+            status_code=404,
+            detail=f"unsupported market: {market_venue.value}/{canonical_symbol}",
+        )
+    return await market_state_store.view(market_venue, canonical_symbol)
+
+
+@app.get(
+    "/market/connections",
+    response_model=list[MarketConnectionState],
+    tags=["market-data"],
+)
+async def get_market_connections() -> list[MarketConnectionState]:
+    """Expose adapter connectivity without leaking venue implementation details."""
+
+    return await market_state_store.connections()
 
 
 class RFQValidationRequest(BaseModel):
