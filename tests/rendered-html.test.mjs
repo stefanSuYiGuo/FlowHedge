@@ -30,6 +30,7 @@ test("server-renders the FlowHedge terminal shell", async () => {
   assert.match(html, /Orders arrive asynchronously/);
   assert.match(html, /RISK REFERENCE LOADING/);
   assert.match(html, /DEMO DESK ASSUMPTIONS/);
+  assert.match(html, /auto target 90% of soft \(\$900K\)/i);
   assert.match(html, /MANUAL MODE · STEP 7/);
   assert.match(html, /No exposure to hedge/);
   assert.match(html, /PnL accounting unavailable/);
@@ -41,5 +42,6 @@ test("server-renders the FlowHedge terminal shell", async () => {
   assert.doesNotMatch(html, /value="0\.10"/);
   assert.doesNotMatch(html, /\+\$9,390/);
   assert.doesNotMatch(html, /FUTURE STEP/);
+  assert.doesNotMatch(html, /RED target flat/i);
   assert.doesNotMatch(html, /Next client RFQ|countdown|codex-preview/i);
 });

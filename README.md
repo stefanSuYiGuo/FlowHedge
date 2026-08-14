@@ -4,7 +4,7 @@ FlowHedge is an institutional crypto sales-trading simulator. The current
 checkpoint contains the reviewable trading-terminal layout, a backend-driven
 institutional client-flow simulator, and an accounting chain from RFQ through
 client fill, manual Spot/Perp hedge orders, simulated fills, and desk-state
-updates. RiskPolicy v1, the backend-only Executable Cost Engine v1, and
+updates. RiskPolicy v1.1, the backend-only Executable Cost Engine v1, and
 Derivative Hedge Economics v1 are active, and the public market universe
 contains six Spot/Perpetual candidates across Kraken, Coinbase, and OKX.
 Production pricing, hedge optimization, smart routing, real execution, and PnL
@@ -221,7 +221,7 @@ This step does not yet compare execution costs, recommend hedges, route orders,
 or change RFQ pricing. Those remain responsibilities of the later Cost Engine,
 Hedge Optimizer, SOR, and Pricing Engine steps.
 
-## Step 7 RiskPolicy v1
+## Step 7 RiskPolicy v1.1
 
 RiskPolicy answers only whether directional delta should be hedged and how much
 exposure should be removed. It does not choose Spot versus Perpetual, select a
@@ -232,14 +232,17 @@ They are not OSL internal risk limits:
 
 - Soft delta limit: USD 1,000,000.
 - Hard delta limit: USD 3,000,000.
-- RED target: flat.
+- Auto-hedge target: 90% of the Soft Limit, or USD 900,000.
 - Hard-breach grace period: five seconds.
 
 GREEN warehouses actual exposure at or below the soft limit. YELLOW targets the
-signed soft-limit boundary. RED targets flat. Classification uses actual,
-fill-based delta; working orders only reduce the remaining hedge requirement and
-contribute to projected delta. Conflict and overhedge guards protect future auto
-execution from unsafe working-order state.
+signed soft-limit boundary. During a RED grace period, the trader-facing
+advisory target is also the signed Soft Limit rather than flat. If RED persists
+for five seconds, the automatic risk-control target becomes 90% of the signed
+Soft Limit, leaving a USD 100,000 buffer inside GREEN without eliminating all
+warehouse exposure. Classification uses actual, fill-based delta; working
+orders reduce advisory and automatic requirements separately. Conflict and
+overhedge guards protect future auto execution from unsafe working-order state.
 
 The independent BTC risk reference is the median of fresh Kraken and Coinbase
 USD Spot mids. One healthy source is accepted in degraded mode. If neither is
@@ -248,9 +251,12 @@ GREEN or inventing a price.
 
 A RED breach owns a stable breach ID and five-second timer. Market ticks, desk
 version changes, API polling, and browser refreshes do not reset it. Exiting RED
-cancels the countdown; remaining RED emits one idempotent
-`AUTO_HEDGE_REQUIRED` event. Step 7 deliberately does not create a fake optimal
-hedge or any automatic order.
+cancels the countdown before takeover; remaining RED emits one idempotent
+`AUTO_HEDGE_REQUIRED` event carrying the latest USD 900,000 target and remaining
+BTC-equivalent requirement. Once an intervention has been armed, its structural
+completion boundary remains USD 900,000 even though ordinary GREEN begins at
+USD 1,000,000. Step 7 deliberately does not create a fake optimal hedge or any
+automatic order.
 
 - `GET /risk/assessment` returns the current assessment and breach lifecycle.
 - `GET /demo/workspace` includes the same assessment beside desk, RFQ, hedge,

@@ -3,13 +3,8 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
-
-
-class RedTargetMode(str, Enum):
-    FLAT = "FLAT"
 
 
 class ClientFlowConfig(BaseModel):
@@ -25,11 +20,13 @@ class RiskPolicyConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    policy_version: str = "RISK_POLICY_V1"
+    policy_version: str = "RISK_POLICY_V1_1"
     assumption_label: str = "DEMO DESK ASSUMPTIONS"
     soft_delta_limit_usd: Decimal = Field(default=Decimal("1000000"), gt=0)
     hard_delta_limit_usd: Decimal = Field(default=Decimal("3000000"), gt=0)
-    red_target_mode: RedTargetMode = RedTargetMode.FLAT
+    auto_hedge_target_ratio_of_soft: Decimal = Field(
+        default=Decimal("0.90"), gt=0, lt=1
+    )
     hard_breach_grace_seconds: Decimal = Field(default=Decimal("5"), gt=0)
 
 

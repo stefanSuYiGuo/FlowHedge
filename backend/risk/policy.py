@@ -1,4 +1,4 @@
-"""Pure RiskPolicy v1 calculations and independent USD Spot reference price."""
+"""Pure RiskPolicy v1.1 calculations and independent USD Spot reference price."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ RISK_REFERENCE_VENUES = (MarketVenue.KRAKEN, MarketVenue.COINBASE)
 def build_risk_reference_price(
     snapshot: UnifiedMarketSnapshot,
 ) -> RiskReferencePrice:
-    """Use only fresh Kraken/Coinbase USD Spot mids for RiskPolicy v1."""
+    """Use only fresh Kraken/Coinbase USD Spot mids for RiskPolicy v1.1."""
 
     eligible = []
     for market in snapshot.markets:
@@ -94,6 +94,10 @@ class RiskPolicy:
             f"risk-{self.config.policy_version.lower()}-"
             f"d{desk_state.version}-m{reference.market_snapshot_version}"
         )
+        auto_target_notional = (
+            self.config.soft_delta_limit_usd
+            * self.config.auto_hedge_target_ratio_of_soft
+        )
 
         if not reference.eligible or reference.price_usd is None:
             return RiskAssessment(
@@ -111,11 +115,24 @@ class RiskPolicy:
                 absolute_delta_exposure_usd=None,
                 risk_band=RiskBand.UNAVAILABLE,
                 action=RiskAction.HOLD,
+                advisory_target_delta_btc=None,
+                advisory_gross_required_hedge_delta_btc=None,
+                advisory_remaining_hedge_requirement_btc=None,
                 target_delta_btc=None,
                 gross_required_hedge_delta_btc=None,
+                remaining_hedge_requirement_btc=None,
+                auto_hedge_target_ratio_of_soft=(
+                    self.config.auto_hedge_target_ratio_of_soft
+                ),
+                auto_hedge_target_notional_usd=auto_target_notional,
+                auto_hedge_target_delta_btc=None,
+                auto_gross_required_hedge_delta_btc=None,
+                auto_qualifying_working_order_delta_btc=None,
+                auto_remaining_hedge_requirement_btc=None,
+                auto_working_order_conflict=False,
+                auto_working_order_overhedge=False,
                 working_order_delta_btc=working,
                 projected_delta_btc=projected,
-                remaining_hedge_requirement_btc=None,
                 working_order_conflict=False,
                 working_order_overhedge=False,
                 auto_hedge_blocked=True,
@@ -130,28 +147,34 @@ class RiskPolicy:
         if absolute_exposure <= self.config.soft_delta_limit_usd:
             band = RiskBand.GREEN
             action = RiskAction.WAREHOUSE
-            target = actual
+            advisory_target = actual
         elif absolute_exposure <= self.config.hard_delta_limit_usd:
             band = RiskBand.YELLOW
             action = RiskAction.PARTIAL_HEDGE
             direction = Decimal("1") if actual > 0 else Decimal("-1")
-            target = direction * self.config.soft_delta_limit_usd / price
+            advisory_target = (
+                direction * self.config.soft_delta_limit_usd / price
+            )
         else:
             band = RiskBand.RED
             action = RiskAction.IMMEDIATE_HEDGE
-            target = Decimal("0")
+            direction = Decimal("1") if actual > 0 else Decimal("-1")
+            advisory_target = (
+                direction * self.config.soft_delta_limit_usd / price
+            )
 
-        gross = target - actual
-        remaining, conflict, overhedge = self._remaining_requirement(gross, working)
-        blocked_reasons: list[str] = []
-        if conflict:
-            blocked_reasons.append("WORKING_ORDER_CONFLICT")
-        if overhedge:
-            blocked_reasons.append("WORKING_ORDER_OVERHEDGE")
-        if remaining == 0 and gross != 0:
-            blocked_reasons.append("NO_REMAINING_HEDGE_REQUIREMENT")
+        advisory_gross = advisory_target - actual
+        advisory_remaining, advisory_conflict, advisory_overhedge = (
+            self._remaining_requirement(advisory_gross, working)
+        )
+        advisory_blocked_reasons = self._blocked_reasons(
+            advisory_gross,
+            advisory_remaining,
+            advisory_conflict,
+            advisory_overhedge,
+        )
 
-        return RiskAssessment(
+        assessment = RiskAssessment(
             assessment_id=assessment_id,
             assessed_at=assessed_at,
             policy_version=self.config.policy_version,
@@ -166,17 +189,102 @@ class RiskPolicy:
             absolute_delta_exposure_usd=absolute_exposure,
             risk_band=band,
             action=action,
-            target_delta_btc=target,
-            gross_required_hedge_delta_btc=gross,
+            advisory_target_delta_btc=advisory_target,
+            advisory_gross_required_hedge_delta_btc=advisory_gross,
+            advisory_remaining_hedge_requirement_btc=advisory_remaining,
+            target_delta_btc=advisory_target,
+            gross_required_hedge_delta_btc=advisory_gross,
+            remaining_hedge_requirement_btc=advisory_remaining,
+            auto_hedge_target_ratio_of_soft=(
+                self.config.auto_hedge_target_ratio_of_soft
+            ),
+            auto_hedge_target_notional_usd=auto_target_notional,
+            auto_hedge_target_delta_btc=None,
+            auto_gross_required_hedge_delta_btc=None,
+            auto_qualifying_working_order_delta_btc=None,
+            auto_remaining_hedge_requirement_btc=None,
+            auto_working_order_conflict=False,
+            auto_working_order_overhedge=False,
             working_order_delta_btc=working,
             projected_delta_btc=projected,
-            remaining_hedge_requirement_btc=remaining,
-            working_order_conflict=conflict,
-            working_order_overhedge=overhedge,
-            auto_hedge_blocked=bool(blocked_reasons),
-            auto_hedge_blocked_reasons=tuple(blocked_reasons),
+            working_order_conflict=advisory_conflict,
+            working_order_overhedge=advisory_overhedge,
+            auto_hedge_blocked=bool(advisory_blocked_reasons),
+            auto_hedge_blocked_reasons=tuple(advisory_blocked_reasons),
             inventory_or_settlement_state=InventoryOrSettlementState.NOT_EVALUATED,
         )
+        return self.apply_auto_target(assessment) if band is RiskBand.RED else assessment
+
+    def apply_auto_target(self, assessment: RiskAssessment) -> RiskAssessment:
+        """Attach the buffered target used only by an active/armed auto path."""
+
+        price = assessment.reference_price_usd
+        if price is None:
+            reasons = tuple(
+                dict.fromkeys(
+                    assessment.auto_hedge_blocked_reasons
+                    + ("RISK_REFERENCE_PRICE_UNAVAILABLE",)
+                )
+            )
+            return assessment.model_copy(
+                update={
+                    "auto_hedge_blocked": True,
+                    "auto_hedge_blocked_reasons": reasons,
+                }
+            )
+
+        actual = assessment.actual_delta_btc
+        if actual == 0:
+            auto_target = Decimal("0")
+        else:
+            direction = Decimal("1") if actual > 0 else Decimal("-1")
+            auto_target = (
+                direction * assessment.auto_hedge_target_notional_usd / price
+            )
+        auto_gross = auto_target - actual
+        auto_remaining, auto_conflict, auto_overhedge = self._remaining_requirement(
+            auto_gross,
+            assessment.working_order_delta_btc,
+        )
+        auto_blocked_reasons = self._blocked_reasons(
+            auto_gross,
+            auto_remaining,
+            auto_conflict,
+            auto_overhedge,
+        )
+        qualifying_working = (
+            Decimal("0")
+            if auto_conflict
+            else assessment.working_order_delta_btc
+        )
+        return assessment.model_copy(
+            update={
+                "auto_hedge_target_delta_btc": auto_target,
+                "auto_gross_required_hedge_delta_btc": auto_gross,
+                "auto_qualifying_working_order_delta_btc": qualifying_working,
+                "auto_remaining_hedge_requirement_btc": auto_remaining,
+                "auto_working_order_conflict": auto_conflict,
+                "auto_working_order_overhedge": auto_overhedge,
+                "auto_hedge_blocked": bool(auto_blocked_reasons),
+                "auto_hedge_blocked_reasons": tuple(auto_blocked_reasons),
+            }
+        )
+
+    @staticmethod
+    def _blocked_reasons(
+        gross: Decimal,
+        remaining: Decimal,
+        conflict: bool,
+        overhedge: bool,
+    ) -> list[str]:
+        blocked_reasons: list[str] = []
+        if conflict:
+            blocked_reasons.append("WORKING_ORDER_CONFLICT")
+        if overhedge:
+            blocked_reasons.append("WORKING_ORDER_OVERHEDGE")
+        if remaining == 0 and gross != 0:
+            blocked_reasons.append("NO_REMAINING_HEDGE_REQUIREMENT")
+        return blocked_reasons
 
     @staticmethod
     def _remaining_requirement(

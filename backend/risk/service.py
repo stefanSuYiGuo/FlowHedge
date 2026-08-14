@@ -106,13 +106,15 @@ class RiskService:
                 seconds=float(self.config.hard_breach_grace_seconds)
             )
             remaining = Decimal(str(max(0.0, (deadline - now).total_seconds())))
-            required = now >= deadline
+            required = active.auto_hedge_event_emitted or now >= deadline
             updated = assessment.model_copy(
                 update={
                     "hard_breach_id": active.breach_id,
                     "hard_breach_started_at": active.started_at,
                     "hard_breach_seconds_remaining": remaining,
                     "auto_hedge_required": required,
+                    "auto_hedge_active": required,
+                    "auto_hedge_complete": False,
                 }
             )
             if required and not active.auto_hedge_event_emitted:
@@ -122,13 +124,32 @@ class RiskService:
                     updated,
                     {
                         "breach_id": active.breach_id,
-                        "actual_delta_btc": updated.actual_delta_btc,
-                        "target_delta_btc": updated.target_delta_btc,
-                        "remaining_hedge_requirement_btc": (
-                            updated.remaining_hedge_requirement_btc
-                        ),
                         "desk_state_version": updated.desk_state_version,
                         "market_snapshot_version": updated.market_snapshot_version,
+                        "actual_delta_btc": updated.actual_delta_btc,
+                        "actual_delta_notional_usd": (
+                            updated.signed_delta_notional_usd
+                        ),
+                        "soft_delta_limit_usd": self.config.soft_delta_limit_usd,
+                        "hard_delta_limit_usd": self.config.hard_delta_limit_usd,
+                        "auto_hedge_target_ratio_of_soft": (
+                            updated.auto_hedge_target_ratio_of_soft
+                        ),
+                        "auto_hedge_target_notional_usd": (
+                            updated.auto_hedge_target_notional_usd
+                        ),
+                        "auto_hedge_target_delta_btc": (
+                            updated.auto_hedge_target_delta_btc
+                        ),
+                        "auto_gross_required_hedge_delta_btc": (
+                            updated.auto_gross_required_hedge_delta_btc
+                        ),
+                        "qualifying_working_order_delta_btc": (
+                            updated.auto_qualifying_working_order_delta_btc
+                        ),
+                        "auto_remaining_hedge_requirement_btc": (
+                            updated.auto_remaining_hedge_requirement_btc
+                        ),
                     },
                 )
             return updated
@@ -154,7 +175,9 @@ class RiskService:
                     "hard_breach_id": active.breach_id,
                     "hard_breach_started_at": active.started_at,
                     "hard_breach_seconds_remaining": remaining,
-                    "auto_hedge_required": False,
+                    "auto_hedge_required": active.auto_hedge_event_emitted,
+                    "auto_hedge_active": active.auto_hedge_event_emitted,
+                    "auto_hedge_complete": False,
                     "auto_hedge_blocked": True,
                     "auto_hedge_blocked_reasons": reasons,
                 }
@@ -162,6 +185,38 @@ class RiskService:
 
         if self._active_breach is not None:
             active = self._active_breach
+            if active.auto_hedge_event_emitted:
+                auto_assessment = self.policy.apply_auto_target(assessment)
+                target_reached = (
+                    auto_assessment.absolute_delta_exposure_usd is not None
+                    and auto_assessment.absolute_delta_exposure_usd
+                    <= auto_assessment.auto_hedge_target_notional_usd
+                )
+                if not target_reached:
+                    return auto_assessment.model_copy(
+                        update={
+                            "hard_breach_id": active.breach_id,
+                            "hard_breach_started_at": active.started_at,
+                            "hard_breach_seconds_remaining": Decimal("0"),
+                            "auto_hedge_required": True,
+                            "auto_hedge_active": True,
+                            "auto_hedge_complete": False,
+                        }
+                    )
+
+                self._active_breach = None
+                return auto_assessment.model_copy(
+                    update={
+                        "hard_breach_id": active.breach_id,
+                        "hard_breach_started_at": active.started_at,
+                        "hard_breach_seconds_remaining": Decimal("0"),
+                        "auto_remaining_hedge_requirement_btc": Decimal("0"),
+                        "auto_hedge_required": False,
+                        "auto_hedge_active": False,
+                        "auto_hedge_complete": True,
+                    }
+                )
+
             self._active_breach = None
             self._emit(
                 EventType.AUTO_HEDGE_CANCELLED,

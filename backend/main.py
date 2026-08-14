@@ -382,7 +382,7 @@ async def reset_demo() -> DeskState:
     tags=["risk"],
 )
 async def get_risk_assessment() -> RiskAssessment:
-    """Return RiskPolicy v1 output without creating hedge orders or changing positions."""
+    """Return RiskPolicy v1.1 output without creating orders or changing positions."""
 
     return await risk_service.assess()
 

@@ -719,9 +719,9 @@ export default function Home() {
               <div className="hedge-workspace">
                 <div className="recommendation-grid risk-recommendation">
                   <div><small>RISK BAND</small><strong>{riskAssessment?.risk_band ?? "UNAVAILABLE"}</strong></div>
-                  <div><small>POLICY TARGET</small><strong>{riskTargetDelta === null ? "—" : formatBtc(riskTargetDelta)}</strong></div>
-                  <div><small>GROSS REQUIREMENT</small><strong>{grossRiskHedge === null ? "—" : formatBtc(grossRiskHedge)}</strong></div>
-                  <div><small>REMAINING AFTER WORKING</small><strong>{remainingRiskHedge === null ? "—" : formatBtc(remainingRiskHedge)}</strong></div>
+                  <div><small>ADVISORY TARGET</small><strong>{riskTargetDelta === null ? "—" : formatBtc(riskTargetDelta)}</strong></div>
+                  <div><small>ADVISORY GROSS</small><strong>{grossRiskHedge === null ? "—" : formatBtc(grossRiskHedge)}</strong></div>
+                  <div><small>ADVISORY REMAINING</small><strong>{remainingRiskHedge === null ? "—" : formatBtc(remainingRiskHedge)}</strong></div>
                 </div>
                 <UnavailableFeature
                   title="RiskPolicy is active; automatic execution is not"
@@ -733,9 +733,9 @@ export default function Home() {
               <div className="hedge-workspace">
                 <div className="recommendation-grid risk-recommendation">
                   <div><small>RISK BAND · ACTION</small><strong>{riskAssessment ? `${riskAssessment.risk_band} · ${riskAssessment.action.replaceAll("_", " ")}` : "UNAVAILABLE"}</strong></div>
-                  <div><small>POLICY TARGET</small><strong>{riskTargetDelta === null ? "—" : formatBtc(riskTargetDelta)}</strong></div>
-                  <div><small>GROSS REQUIREMENT</small><strong>{grossRiskHedge === null ? "—" : formatBtc(grossRiskHedge)}</strong></div>
-                  <div><small>REMAINING AFTER WORKING</small><strong>{remainingRiskHedge === null ? "—" : formatBtc(remainingRiskHedge)}</strong></div>
+                  <div><small>ADVISORY TARGET</small><strong>{riskTargetDelta === null ? "—" : formatBtc(riskTargetDelta)}</strong></div>
+                  <div><small>ADVISORY GROSS</small><strong>{grossRiskHedge === null ? "—" : formatBtc(grossRiskHedge)}</strong></div>
+                  <div><small>ADVISORY REMAINING</small><strong>{remainingRiskHedge === null ? "—" : formatBtc(remainingRiskHedge)}</strong></div>
                 </div>
                 <div className="recommendation-grid">
                   <div>
@@ -832,7 +832,7 @@ export default function Home() {
                   <span>Projected <strong>{formatBtc(hedgeOutcomeDelta)}</strong></span>
                 </div>
                 <p className="demo-policy-note">
-                  RiskPolicy decides the policy target and remaining requirement above; it does not choose Spot, Perp, or venue. Enter Spot and Perp quantities independently. A trader may intentionally differ from the policy output, while the existing manual safety control prevents crossing through flat. This is not a Hedge Optimizer recommendation. New client fills remain independent and can move projected delta while orders are working.
+                  RiskPolicy decides the advisory target and remaining requirement above; it does not choose Spot, Perp, or venue. Enter Spot and Perp quantities independently. A trader may intentionally differ from the policy output, while the existing manual safety control prevents crossing through flat. This is not a Hedge Optimizer recommendation. New client fills remain independent and can move projected delta while orders are working.
                 </p>
 
                 <div className={`market-candidate ${marketStatus !== "LIVE" ? "unavailable" : ""}`}>
@@ -951,8 +951,8 @@ export default function Home() {
                 <div><small>DERIVATIVE DELTA</small><strong>{formatBtc(Number(deskState.derivative_delta_btc))}</strong></div>
                 <div><small>WORKING ORDER DELTA</small><strong>{formatBtc(Number(deskState.working_order_delta_btc))}</strong></div>
                 <div><small>PROJECTED DELTA</small><strong>{formatBtc(projectedDelta)}</strong></div>
-                <div><small>POLICY TARGET</small><strong>{riskTargetDelta === null ? "—" : formatBtc(riskTargetDelta)}</strong></div>
-                <div><small>REMAINING HEDGE</small><strong>{remainingRiskHedge === null ? "—" : formatBtc(remainingRiskHedge)}</strong></div>
+                <div><small>ADVISORY TARGET</small><strong>{riskTargetDelta === null ? "—" : formatBtc(riskTargetDelta)}</strong></div>
+                <div><small>ADVISORY REMAINING</small><strong>{remainingRiskHedge === null ? "—" : formatBtc(remainingRiskHedge)}</strong></div>
               </div>
               <div className={`risk-status risk-${(riskAssessment?.risk_band ?? "unavailable").toLowerCase()}`}>
                 <strong>{riskAssessment?.risk_band ?? "UNAVAILABLE"}</strong>
@@ -969,7 +969,7 @@ export default function Home() {
                 </p>
               )}
               <p className="future-note">
-                {riskAssessment?.assumption_label ?? "DEMO DESK ASSUMPTIONS"}: soft $1.0M, hard $3.0M, RED target flat, 5-second grace. These are not OSL internal limits. Inventory / settlement: {riskAssessment?.inventory_or_settlement_state ?? "NOT EVALUATED"}.
+                {riskAssessment?.assumption_label ?? "DEMO DESK ASSUMPTIONS"}: soft $1.0M advisory target, hard $3.0M, auto target 90% of soft ($900K), 5-second grace. These are not OSL internal limits. Inventory / settlement: {riskAssessment?.inventory_or_settlement_state ?? "NOT EVALUATED"}.
               </p>
             </div>
           </Panel>
@@ -1098,7 +1098,7 @@ function describeEvent(event: FlowEvent): string {
     case "AUTO_HEDGE_CANCELLED":
       return `Exposure exited RED · now ${String(event.payload.exit_risk_band)}`;
     case "AUTO_HEDGE_REQUIRED":
-      return `Remaining requirement ${formatBtc(payloadNumber(event, "remaining_hedge_requirement_btc"))} · no order created`;
+      return `Auto requirement ${formatBtc(payloadNumber(event, "auto_remaining_hedge_requirement_btc"))} toward ${formatCompactUsd(payloadNumber(event, "auto_hedge_target_notional_usd"))} · no order created`;
     default:
       return event.aggregate_id;
   }
