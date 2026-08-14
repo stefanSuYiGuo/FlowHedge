@@ -12,6 +12,9 @@ export type QuoteStatus =
   | "EXPIRED"
   | "SUPERSEDED"
   | "REJECTED";
+export type HedgeOrderOrigin = "MANUAL";
+export type HedgeSide = "BUY" | "SELL" | "LONG" | "SHORT";
+export type HedgeOrderStatus = "OPEN" | "PARTIALLY_FILLED" | "FILLED";
 
 export interface MarketObservation {
   venue: string;
@@ -81,6 +84,34 @@ export interface DeskState {
   working_order_delta_btc: string;
 }
 
+export interface HedgeOrder {
+  hedge_order_id: string;
+  batch_id: string;
+  origin: HedgeOrderOrigin;
+  venue: string;
+  instrument_id: string;
+  instrument_type: "SPOT" | "PERPETUAL";
+  side: HedgeSide;
+  quantity_btc: string;
+  filled_quantity_btc: string;
+  remaining_quantity_btc: string;
+  status: HedgeOrderStatus;
+  created_at: string;
+  created_desk_state_version: number;
+}
+
+export interface HedgeFill {
+  hedge_fill_id: string;
+  hedge_order_id: string;
+  instrument_id: string;
+  instrument_type: "SPOT" | "PERPETUAL";
+  side: HedgeSide;
+  quantity_btc: string;
+  fill_price_usd: string;
+  filled_at: string;
+  execution_source: string;
+}
+
 export interface FlowEvent {
   event_id: string;
   event_type: string;
@@ -98,6 +129,26 @@ export interface DemoScenarioResult {
   rfq: RFQ;
   quote: Quote;
   client_trade: ClientTrade;
+  desk_state_before: DeskState;
+  desk_state_after: DeskState;
+  events: FlowEvent[];
+}
+
+export interface HedgeOrderBatchResult {
+  replayed: boolean;
+  batch_id: string;
+  demo_target_total_delta_btc: string;
+  required_hedge_delta_btc: string;
+  orders: HedgeOrder[];
+  desk_state_before: DeskState;
+  desk_state_after: DeskState;
+  events: FlowEvent[];
+}
+
+export interface HedgeFillResult {
+  replayed: boolean;
+  fill: HedgeFill;
+  order: HedgeOrder;
   desk_state_before: DeskState;
   desk_state_after: DeskState;
   events: FlowEvent[];

@@ -39,12 +39,32 @@ class QuoteStatus(str, Enum):
     REJECTED = "REJECTED"
 
 
+class HedgeOrderOrigin(str, Enum):
+    MANUAL = "MANUAL"
+
+
+class HedgeSide(str, Enum):
+    BUY = "BUY"
+    SELL = "SELL"
+    LONG = "LONG"
+    SHORT = "SHORT"
+
+
+class HedgeOrderStatus(str, Enum):
+    OPEN = "OPEN"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    FILLED = "FILLED"
+
+
 class EventType(str, Enum):
     RFQ_RECEIVED = "RFQ_RECEIVED"
     RFQ_VALIDATED = "RFQ_VALIDATED"
     QUOTE_GENERATED = "QUOTE_GENERATED"
     QUOTE_ACCEPTED = "QUOTE_ACCEPTED"
     CLIENT_FILL = "CLIENT_FILL"
+    HEDGE_ORDER_CREATED = "HEDGE_ORDER_CREATED"
+    HEDGE_FILL = "HEDGE_FILL"
+    HEDGE_ORDER_UPDATED = "HEDGE_ORDER_UPDATED"
     POSITION_UPDATED = "POSITION_UPDATED"
 
 
@@ -116,6 +136,68 @@ class ClientTrade(BaseModel):
     traded_at: datetime
 
 
+class HedgeOrder(BaseModel):
+    """A simulated execution instruction; it does not alter economic positions."""
+
+    model_config = ConfigDict(frozen=True)
+
+    hedge_order_id: str
+    batch_id: str
+    origin: HedgeOrderOrigin
+    venue: str
+    instrument_id: str
+    instrument_type: InstrumentType
+    side: HedgeSide
+    quantity_btc: Decimal = Field(gt=0)
+    filled_quantity_btc: Decimal = Field(ge=0)
+    remaining_quantity_btc: Decimal = Field(ge=0)
+    status: HedgeOrderStatus
+    created_at: datetime
+    created_desk_state_version: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def quantities_and_side_must_reconcile(self) -> "HedgeOrder":
+        if self.filled_quantity_btc + self.remaining_quantity_btc != self.quantity_btc:
+            raise ValueError(
+                "filled_quantity_btc + remaining_quantity_btc must equal quantity_btc"
+            )
+        if self.instrument_type is InstrumentType.SPOT and self.side not in {
+            HedgeSide.BUY,
+            HedgeSide.SELL,
+        }:
+            raise ValueError("spot hedge orders must use BUY or SELL")
+        if self.instrument_type is InstrumentType.PERPETUAL and self.side not in {
+            HedgeSide.LONG,
+            HedgeSide.SHORT,
+        }:
+            raise ValueError("perpetual hedge orders must use LONG or SHORT")
+        if self.status is HedgeOrderStatus.OPEN and self.filled_quantity_btc != 0:
+            raise ValueError("OPEN hedge orders cannot have a filled quantity")
+        if self.status is HedgeOrderStatus.PARTIALLY_FILLED and not (
+            0 < self.filled_quantity_btc < self.quantity_btc
+        ):
+            raise ValueError("PARTIALLY_FILLED orders require a partial filled quantity")
+        if self.status is HedgeOrderStatus.FILLED and self.remaining_quantity_btc != 0:
+            raise ValueError("FILLED hedge orders must have zero remaining quantity")
+        return self
+
+
+class HedgeFill(BaseModel):
+    """An immutable simulated execution; only fills change economic positions."""
+
+    model_config = ConfigDict(frozen=True)
+
+    hedge_fill_id: str
+    hedge_order_id: str
+    instrument_id: str
+    instrument_type: InstrumentType
+    side: HedgeSide
+    quantity_btc: Decimal = Field(gt=0)
+    fill_price_usd: Decimal = Field(gt=0)
+    filled_at: datetime
+    execution_source: str
+
+
 class DeskState(BaseModel):
     version: int = Field(ge=0)
     as_of: datetime
@@ -154,6 +236,26 @@ class DemoScenarioResult(BaseModel):
     rfq: RFQ
     quote: Quote
     client_trade: ClientTrade
+    desk_state_before: DeskState
+    desk_state_after: DeskState
+    events: tuple[Event, ...]
+
+
+class HedgeOrderBatchResult(BaseModel):
+    replayed: bool
+    batch_id: str
+    demo_target_total_delta_btc: Decimal
+    required_hedge_delta_btc: Decimal
+    orders: tuple[HedgeOrder, ...]
+    desk_state_before: DeskState
+    desk_state_after: DeskState
+    events: tuple[Event, ...]
+
+
+class HedgeFillResult(BaseModel):
+    replayed: bool
+    fill: HedgeFill
+    order: HedgeOrder
     desk_state_before: DeskState
     desk_state_after: DeskState
     events: tuple[Event, ...]

@@ -2,17 +2,18 @@
 
 FlowHedge is an institutional crypto sales-trading simulator. The current
 checkpoint contains the reviewable trading-terminal layout and a deterministic
-backend accounting chain from RFQ through client fill and desk-state update.
-Exchange connectivity, production pricing, hedge optimization, execution
-simulation, risk, and PnL logic remain deferred.
+backend accounting chain from RFQ through client fill, manual Spot/Perp hedge
+orders, simulated fills, and desk-state updates. Exchange connectivity,
+production pricing, hedge optimization, risk policy, and PnL logic remain
+deferred.
 
 ## Current layout
 
 - **Header:** instrument, reference price, venue connectivity, and manual/auto hedge mode.
-- **Desk strip:** net delta, risk state, PnL, client response model, and flow state.
-- **Left rail:** executable multi-venue market view, asynchronous RFQ inbox, flow pause/resume, and manual RFQ injection.
-- **Center stage:** active RFQ, client quote construction, hedge recommendation, trader allocation controls, and event tape.
-- **Right rail:** desk inventory and risk, PnL attribution, and hedge blotter.
+- **Desk strip:** actual, working, and projected delta plus Spot and derivative positions.
+- **Left rail:** fixed market fixture, asynchronous RFQ inbox, flow pause/resume, and manual RFQ injection.
+- **Center stage:** active RFQ, accepted quote, manual hedge allocation and fill controls, and event tape.
+- **Right rail:** reconciled desk positions, deferred PnL, and the hedge order/fill blotter.
 
 No countdown or prediction of the next client RFQ is shown. Orders are modeled
 as asynchronous arrivals.
@@ -47,7 +48,7 @@ Then open:
 - API health: <http://localhost:8000/health>
 - Interactive API documentation: <http://localhost:8000/docs>
 
-The frontend currently uses static placeholder state and does not call this API.
+The frontend reads demo state and actions from this API.
 
 ## Step 2 accounting demo
 
@@ -78,11 +79,31 @@ The first run moves the desk from flat to `-5 BTC` spot inventory and total
 delta. A repeated run is identified as a replay and cannot book the same client
 trade twice. **Reset Demo** returns the backend and UI to version zero.
 
-Risk state, hedge recommendations, hedge orders, and PnL remain visibly marked
-as unavailable until their accounting steps are implemented.
+Risk Policy, automatic hedge recommendations, and PnL remain visibly marked as
+unavailable until their later accounting steps are implemented.
 
 The frontend defaults to `http://127.0.0.1:8000`. To use a different local API,
 set `NEXT_PUBLIC_FLOWHEDGE_API_URL` before starting the frontend.
+
+## Step 4 hedge execution demo
+
+After the client fill creates `-5 BTC` of actual delta, manual mode exposes an
+explicit Step 4 demo target of `0 BTC`. Enter the Spot quantity; the Perp
+remainder is calculated so the submitted hedge totals `+5 BTC`.
+
+- `POST /demo/hedge-orders` records the manual Spot/Perp instructions. Actual
+  positions do not change; working delta becomes `+5 BTC`, making projected
+  delta `0 BTC`.
+- `POST /demo/hedge-orders/{order_id}/fills` records an immutable simulated
+  fill. Only these fills change Spot inventory or derivative delta.
+- The UI can apply 50% fills, then fill the remainder so actual and working
+  delta move in opposite directions until actual total delta reaches `0 BTC`.
+- `GET /demo/hedge-orders` and `GET /demo/hedge-fills` restore the blotter after
+  a page refresh. Reset clears client trades, hedge orders, fills, and events.
+
+The zero target is a labeled demo assumption, not a Risk Policy output. Manual
+allocation is not presented as a Hedge Optimizer recommendation, and the fixed
+fill prices are not real market data.
 
 ## Validate
 

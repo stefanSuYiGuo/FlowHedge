@@ -9,8 +9,21 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from .demo import demo_service
-from .domain.models import DemoScenarioResult, DeskState, Event
+from .demo import (
+    DemoStateError,
+    HedgeAllocationError,
+    HedgeFillError,
+    demo_service,
+)
+from .domain.models import (
+    DemoScenarioResult,
+    DeskState,
+    Event,
+    HedgeFill,
+    HedgeFillResult,
+    HedgeOrder,
+    HedgeOrderBatchResult,
+)
 from .domain.validation import (
     RFQBelowMinimumNotional,
     calculate_notional_usd,
@@ -48,6 +61,17 @@ class RFQValidationResponse(BaseModel):
     valid: bool
     notional_usd: Decimal
     rule: str = "notional_usd > 500000"
+
+
+class ManualHedgeOrderRequest(BaseModel):
+    batch_id: str = Field(min_length=1, max_length=100)
+    spot_quantity_btc: Decimal = Field(ge=0)
+    perp_quantity_btc: Decimal = Field(ge=0)
+
+
+class SimulatedHedgeFillRequest(BaseModel):
+    hedge_fill_id: str = Field(min_length=1, max_length=100)
+    quantity_btc: Decimal = Field(gt=0)
 
 
 @app.post(
@@ -104,6 +128,61 @@ async def get_demo_scenario() -> Optional[DemoScenarioResult]:
     """Return the booked demo scenario, or null after a reset."""
 
     return demo_service.saved_result
+
+
+@app.post(
+    "/demo/hedge-orders",
+    response_model=HedgeOrderBatchResult,
+    tags=["demo", "hedging"],
+)
+async def create_manual_hedge_orders(
+    request: ManualHedgeOrderRequest,
+) -> HedgeOrderBatchResult:
+    """Create a manual Spot/Perp split for the explicit Step 4 demo target."""
+
+    try:
+        return demo_service.create_manual_hedge_orders(
+            request.spot_quantity_btc,
+            request.perp_quantity_btc,
+            request.batch_id,
+        )
+    except HedgeAllocationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except DemoStateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.post(
+    "/demo/hedge-orders/{hedge_order_id}/fills",
+    response_model=HedgeFillResult,
+    tags=["demo", "hedging"],
+)
+async def simulate_hedge_fill(
+    hedge_order_id: str,
+    request: SimulatedHedgeFillRequest,
+) -> HedgeFillResult:
+    """Simulate one idempotent fill; only this endpoint changes positions."""
+
+    try:
+        return demo_service.simulate_hedge_fill(
+            hedge_order_id,
+            request.quantity_btc,
+            request.hedge_fill_id,
+        )
+    except HedgeFillError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except DemoStateError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.get("/demo/hedge-orders", response_model=list[HedgeOrder], tags=["hedging"])
+async def get_hedge_orders() -> list[HedgeOrder]:
+    return list(demo_service.hedge_orders.values())
+
+
+@app.get("/demo/hedge-fills", response_model=list[HedgeFill], tags=["hedging"])
+async def get_hedge_fills() -> list[HedgeFill]:
+    return demo_service.hedge_fills
 
 
 @app.get("/desk/state", response_model=DeskState, tags=["desk"])

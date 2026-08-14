@@ -130,13 +130,19 @@ button:disabled { opacity: .45; cursor: not-allowed !important; }
 .allocation-controls input, .allocation-controls select { width: 100%; height: 35px; padding: 0 9px; color: var(--ink); background: #06121a; border: 1px solid var(--border-strong); border-radius: 0; outline: none; font: 10px var(--font-geist-mono), monospace; }
 .allocation-controls input:focus, .allocation-controls select:focus { border-color: var(--accent); }
 .allocation-controls.disabled { opacity: .48; }
+.allocation-controls.locked input { color: var(--muted-strong); background: #091720; }
 .allocation-summary { margin-top: 9px; padding: 8px 10px; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; color: var(--muted-strong); background: #07131c; border: 1px solid var(--border); font: 9px var(--font-geist-mono), monospace; }
 .allocation-summary strong { color: var(--positive); }
+.demo-policy-note { margin: 8px 1px 0; color: var(--muted); font-size: 8px; line-height: 1.45; }
 .decision-actions { margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.decision-actions.three-actions { grid-template-columns: 1.2fr 1fr 1fr; }
 .decision-actions button { padding: 10px; cursor: pointer; font-size: 9px; font-weight: 850; letter-spacing: .04em; }
 .secondary-action { color: var(--ink); background: transparent; border: 1px solid var(--border-strong); }
 .primary-action { color: #001713; background: var(--accent); border: 1px solid var(--accent); }
 .auto-mode-message { margin-top: 10px; padding: 10px; display: flex; align-items: center; gap: 9px; color: var(--positive); border: 1px solid #176d5d; background: var(--accent-soft); font-size: 9px; }
+.hedge-complete { margin-top: 10px; padding: 9px 10px; display: flex; align-items: center; gap: 9px; color: var(--positive); background: var(--accent-soft); border: 1px solid #176d5d; }
+.hedge-complete strong { display: block; font-size: 9px; letter-spacing: .06em; }
+.hedge-complete p { margin: 3px 0 0; color: #8ac8b7; font-size: 8px; line-height: 1.4; }
 
 .unavailable-feature { min-height: 210px; padding: 24px; display: flex; align-items: center; justify-content: center; gap: 13px; color: var(--muted); background: linear-gradient(135deg, rgba(15, 32, 44, .38), rgba(6, 16, 25, .1)); }
 .unavailable-feature.compact { min-height: 112px; padding: 16px; justify-content: flex-start; }
@@ -144,7 +150,7 @@ button:disabled { opacity: .45; cursor: not-allowed !important; }
 .unavailable-feature strong { display: block; color: var(--muted-strong); font-size: 10px; }
 .unavailable-feature p { max-width: 480px; margin: 5px 0 0; font-size: 9px; line-height: 1.55; }
 
-.event-tape { padding: 7px 12px 9px; max-height: 128px; overflow: hidden; font: 8px var(--font-geist-mono), monospace; }
+.event-tape { padding: 7px 12px 9px; max-height: 168px; overflow: auto; font: 8px var(--font-geist-mono), monospace; }
 .event-row { display: grid; grid-template-columns: 58px 94px 1fr; gap: 8px; padding: 3px 0; color: var(--muted); }
 .event-row span { color: var(--accent); }
 .event-row p { margin: 0; color: var(--muted-strong); }
@@ -176,6 +182,8 @@ button:disabled { opacity: .45; cursor: not-allowed !important; }
 .hedge-blotter > div:last-child { border-bottom: 0; }
 .hedge-blotter strong { display: block; font-size: 9px; }
 .hedge-blotter small { display: block; margin-top: 4px; color: var(--muted); }
+.blotter-progress { text-align: right; }
+.hedge-blotter > .fill-summary { margin-top: 3px; padding-top: 10px; color: var(--accent); border-top: 1px solid var(--border-strong); border-bottom: 0; }
 .terminal-footer { min-height: 27px; padding: 6px 12px; display: flex; justify-content: space-between; color: var(--muted); background: #061019; border-top: 1px solid var(--border-strong); font-size: 8px; letter-spacing: .06em; }
 
 @media (max-width: 1000px) {
@@ -194,6 +202,7 @@ button:disabled { opacity: .45; cursor: not-allowed !important; }
   .mode-controls button { flex: 1; }
   .desk-strip { grid-template-columns: repeat(2, 1fr); }
   .quote-section, .allocation-controls { grid-template-columns: 1fr; }
+  .decision-actions.three-actions { grid-template-columns: 1fr; }
   .quote-prices { border-right: 0; border-bottom: 1px solid var(--border); }
   .recommendation-grid { grid-template-columns: repeat(2, 1fr); }
   .active-rfq { align-items: flex-start; flex-direction: column; }
