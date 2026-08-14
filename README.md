@@ -387,11 +387,18 @@ do not churn a recommendation. Acceptance revalidates current exposure,
 working-order guards, venue eligibility, freshness, and prior execution before
 creating orders. Existing simulated fills still own all position changes.
 
-No institutional fee tier or expected holding horizon has been supplied. The
-live default therefore excludes Perpetuals without a horizon and reports
-`NO_FEASIBLE_HEDGE` when Spot fees are also unconfigured, rather than inventing
-economics. Configured test fixtures cover fully and partially feasible plans,
-plan acceptance, idempotency, invalidation, and order/fill accounting.
+Step 9.3.1 supplies two centralized and explicitly disclosed demo economics
+assumptions: a uniform 2.0 bps taker fee for all six venue/instrument mappings
+and a default four-hour expected hedge horizon. The equal fee prevents invented
+venue-tier differences from biasing routing; these values are not actual OSL or
+venue institutional fees. They can later be replaced without changing the book
+sweeper, cost/funding formulas, candidate builder, or allocator.
+
+The runtime can therefore produce genuine live-data HedgePlans while continuing
+to exclude stale, disconnected, illiquid, metadata-incomplete, or funding-
+incomplete candidates. Test coverage includes fully and partially feasible
+plans, fee application, plan acceptance, idempotency, invalidation, and
+order/fill accounting.
 
 ## Validate
 

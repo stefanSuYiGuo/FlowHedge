@@ -1187,7 +1187,7 @@ function SystemRecommendation({
             <span><small>EXPECTED TOTAL COST</small><strong>{plan.total_expected_cost_bps === null ? "—" : `${Number(plan.total_expected_cost_bps).toFixed(2)} bps`}</strong></span>
             <span><small>USD COST</small><strong>{plan.total_expected_cost_usd === null ? "—" : formatSignedCompactUsd(Number(plan.total_expected_cost_usd))}</strong></span>
             <span><small>MARKET SNAPSHOT</small><strong>v{plan.market_snapshot_version}</strong></span>
-            <span><small>HOLDING HORIZON</small><strong>{recommendation.holding_horizon_status === "CONFIGURED" ? `${recommendation.expected_holding_seconds}s` : "NOT SET · SPOT ONLY"}</strong></span>
+            <span><small>HOLDING HORIZON</small><strong>{recommendation.holding_horizon_status === "CONFIGURED" ? formatHoldingHorizon(recommendation.expected_holding_seconds) : "NOT SET · SPOT ONLY"}</strong></span>
           </div>
 
           <div className="why-this-hedge">
@@ -1205,6 +1205,11 @@ function SystemRecommendation({
             <span>{plan.explanation_data.allocator_method}</span>
             <span>Desk v{plan.desk_state_version}</span>
           </div>
+          {recommendation.economics_assumption_label && (
+            <p className="economics-assumption-disclosure">
+              {recommendation.economics_assumption_label} · Taker fee {recommendation.demo_taker_fee_bps === null ? "—" : `${Number(recommendation.demo_taker_fee_bps).toFixed(1)} bps`} · Hedge horizon {formatHoldingHorizon(recommendation.expected_holding_seconds)} · {recommendation.fee_disclaimer}
+            </p>
+          )}
         </>
       )}
 
@@ -1257,6 +1262,13 @@ function displayHedgeLegSide(
 ): string {
   if (instrumentType === "SPOT") return side;
   return side === "BUY" ? "LONG" : "SHORT";
+}
+
+function formatHoldingHorizon(seconds: number | null): string {
+  if (seconds === null) return "NOT SET";
+  if (seconds % 3600 === 0) return `${seconds / 3600}h`;
+  if (seconds % 60 === 0) return `${seconds / 60}m`;
+  return `${seconds}s`;
 }
 
 function Panel({

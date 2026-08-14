@@ -385,6 +385,9 @@ export interface AdvisoryHedgeRecommendation {
   reason_codes: string[];
   expected_holding_seconds: number | null;
   holding_horizon_status: "CONFIGURED" | "UNAVAILABLE_SPOT_ONLY";
+  demo_taker_fee_bps: string | null;
+  economics_assumption_label: string | null;
+  fee_disclaimer: string | null;
 }
 
 export type RiskBand = "GREEN" | "YELLOW" | "RED" | "UNAVAILABLE";

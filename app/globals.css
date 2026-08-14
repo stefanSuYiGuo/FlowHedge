@@ -198,6 +198,7 @@ button:disabled { opacity: .45; cursor: not-allowed !important; }
 .why-this-hedge ul { margin: 6px 0 0; padding-left: 15px; color: var(--muted-strong); font-size: 8px; line-height: 1.55; }
 .why-this-hedge p { margin: 6px 0 0; color: var(--muted); font-size: 8px; }
 .plan-provenance { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 10px; color: var(--muted); font: 7px var(--font-geist-mono), monospace; }
+.economics-assumption-disclosure { margin: 7px 0 0; color: var(--muted); font: 7px/1.45 var(--font-geist-mono), monospace; text-transform: uppercase; }
 .system-plan-actions { margin-top: 9px; }
 .manual-override-workflow { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-strong); }
 .manual-override-heading { margin-bottom: 8px; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }

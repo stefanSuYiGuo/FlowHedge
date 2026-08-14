@@ -30,6 +30,22 @@ class RiskPolicyConfig(BaseModel):
     hard_breach_grace_seconds: Decimal = Field(default=Decimal("5"), gt=0)
 
 
+class DemoDeskConfig(BaseModel):
+    """Explicit economics assumptions for the interview demo runtime."""
+
+    model_config = ConfigDict(frozen=True)
+
+    assumption_label: str = "DEMO DESK ASSUMPTION"
+    fee_disclaimer: str = (
+        "NOT ACTUAL OSL OR VENUE INSTITUTIONAL FEES"
+    )
+    taker_fee_bps: Decimal = Field(default=Decimal("2.0"), ge=0)
+    default_expected_hedge_horizon_seconds: int = Field(
+        default=14400,
+        gt=0,
+    )
+
+
 class StablecoinQuoteConfig(BaseModel):
     """Explicit MVP conversion assumptions; never silently rename stablecoins."""
 
@@ -43,4 +59,5 @@ class StablecoinQuoteConfig(BaseModel):
 
 client_flow_config = ClientFlowConfig()
 risk_policy_config = RiskPolicyConfig()
+demo_desk_config = DemoDeskConfig()
 stablecoin_quote_config = StablecoinQuoteConfig()

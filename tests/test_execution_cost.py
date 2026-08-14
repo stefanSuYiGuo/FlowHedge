@@ -262,6 +262,34 @@ def test_high_precision_inverse_levels_preserve_exact_quantity_reconciliation() 
     assert result.fully_executable is False
 
 
+def test_high_precision_partial_sweep_clamps_negative_depth_rounding_residue() -> None:
+    inverse_rules = rules(
+        instrument_type=InstrumentType.PERPETUAL,
+        venue_symbol="PI_XBTUSD",
+        contract_structure=ContractStructure.INVERSE,
+    )
+    quantities = (
+        "0.0007001909611712285168682367919",
+        "0.2130946698488464598249801114",
+        "0.0007000739850916062720264755253",
+        "0.8752237096427804424081895626",
+    )
+    book = executable_book(
+        instrument=inverse_rules,
+        bids=tuple(("99999", quantity) for quantity in quantities),
+        asks=tuple(("100001", quantity) for quantity in quantities),
+    )
+
+    result = estimate_execution_cost(
+        request(ExecutionSide.BUY, "8", instrument=inverse_rules),
+        snapshot(market_view(instrument=inverse_rules, book=book)),
+    )
+
+    assert result.status is ExecutionCostStatus.INSUFFICIENT_LIQUIDITY
+    assert result.depth_impact_bps == Decimal("0")
+    assert result.spread_cost_bps == result.total_price_cost_bps
+
+
 @pytest.mark.parametrize("side", [ExecutionSide.BUY, ExecutionSide.SELL])
 def test_cost_sign_and_spread_depth_decomposition(side: ExecutionSide) -> None:
     result = estimate_execution_cost(request(side, "2.5"), snapshot())

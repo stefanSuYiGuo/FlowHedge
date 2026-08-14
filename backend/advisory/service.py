@@ -6,6 +6,7 @@ import asyncio
 from decimal import Decimal
 from typing import Optional
 
+from ..config import DemoDeskConfig, demo_desk_config
 from ..demo import (
     DemoStateError,
     DemoTradingService,
@@ -48,11 +49,13 @@ class AdvisoryHedgeService:
         trading: DemoTradingService,
         *,
         expected_holding_seconds: Optional[int] = None,
+        demo_config: Optional[DemoDeskConfig] = None,
     ) -> None:
         self.risk = risk
         self.optimizer = optimizer
         self.trading = trading
         self.expected_holding_seconds = expected_holding_seconds
+        self.demo_config = demo_config
         self._lock: Optional[asyncio.Lock] = None
         self._lock_loop: Optional[asyncio.AbstractEventLoop] = None
         self.reset()
@@ -319,6 +322,21 @@ class AdvisoryHedgeService:
                 if self.expected_holding_seconds is not None
                 else "UNAVAILABLE_SPOT_ONLY"
             ),
+            demo_taker_fee_bps=(
+                self.demo_config.taker_fee_bps
+                if self.demo_config is not None
+                else None
+            ),
+            economics_assumption_label=(
+                self.demo_config.assumption_label
+                if self.demo_config is not None
+                else None
+            ),
+            fee_disclaimer=(
+                self.demo_config.fee_disclaimer
+                if self.demo_config is not None
+                else None
+            ),
         )
 
     @staticmethod
@@ -447,5 +465,8 @@ advisory_hedge_service = AdvisoryHedgeService(
     risk_service,
     hedge_optimizer_service,
     demo_service,
-    expected_holding_seconds=None,
+    expected_holding_seconds=(
+        demo_desk_config.default_expected_hedge_horizon_seconds
+    ),
+    demo_config=demo_desk_config,
 )

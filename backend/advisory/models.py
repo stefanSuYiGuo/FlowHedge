@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
@@ -33,6 +34,9 @@ class AdvisoryHedgeRecommendation(BaseModel):
     reason_codes: tuple[str, ...] = ()
     expected_holding_seconds: Optional[int] = None
     holding_horizon_status: str = "UNAVAILABLE_SPOT_ONLY"
+    demo_taker_fee_bps: Optional[Decimal] = None
+    economics_assumption_label: Optional[str] = None
+    fee_disclaimer: Optional[str] = None
 
 
 class AdvisoryWorkspaceState(BaseModel):

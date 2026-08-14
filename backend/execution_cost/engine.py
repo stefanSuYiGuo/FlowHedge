@@ -138,20 +138,22 @@ def estimate_execution_cost(
 
     if request.side is ExecutionSide.BUY:
         spread_cost_bps = (best_ask - arrival_mid) / arrival_mid * BASIS_POINTS
-        depth_impact_bps = (
-            (sweep.execution_vwap - best_ask) / arrival_mid * BASIS_POINTS
-        )
-        total_price_cost_bps = execution_price_cost_bps(
-            request.side, sweep.execution_vwap, arrival_mid
+        depth_impact_bps = max(
+            Decimal("0"),
+            (sweep.execution_vwap - best_ask) / arrival_mid * BASIS_POINTS,
         )
     else:
         spread_cost_bps = (arrival_mid - best_bid) / arrival_mid * BASIS_POINTS
-        depth_impact_bps = (
-            (best_bid - sweep.execution_vwap) / arrival_mid * BASIS_POINTS
+        depth_impact_bps = max(
+            Decimal("0"),
+            (best_bid - sweep.execution_vwap) / arrival_mid * BASIS_POINTS,
         )
-        total_price_cost_bps = execution_price_cost_bps(
-            request.side, sweep.execution_vwap, arrival_mid
-        )
+
+    # A swept VWAP cannot improve on the same-side touch. Deriving filled
+    # quantity from the accounting identity can nevertheless leave a tiny
+    # negative Decimal residue (observed around 1e-24 on live inverse books).
+    # Clamp that numerical noise and preserve the exact cost decomposition.
+    total_price_cost_bps = spread_cost_bps + depth_impact_bps
 
     executed_notional_usd = (
         sweep.executed_notional_quote * instrument.usd_conversion_rate
