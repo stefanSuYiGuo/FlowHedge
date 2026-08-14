@@ -93,6 +93,7 @@ def instrument_rules_from_kraken_futures(
         price_precision=decimal_precision(tick_size),
         quantity_precision=quantity_precision,
         status="ONLINE" if instrument.get("tradeable") else "OFFLINE",
+        eligible_for_execution=bool(instrument.get("tradeable")),
         contract_structure=(
             ContractStructure.INVERSE if inverse else ContractStructure.LINEAR
         ),

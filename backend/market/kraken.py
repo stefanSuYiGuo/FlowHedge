@@ -232,6 +232,7 @@ class KrakenSpotMarketDataAdapter(MarketDataAdapter):
                 price_precision=int(pair["price_precision"]),
                 quantity_precision=int(pair["qty_precision"]),
                 status=str(pair["status"]),
+                eligible_for_execution=str(pair["status"]).upper() == "ONLINE",
                 received_at=received_at,
             )
             self._instrument_rules = rules

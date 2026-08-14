@@ -143,6 +143,7 @@ def instrument_rules_from_product(
         price_precision=decimal_precision(price_increment),
         quantity_precision=decimal_precision(quantity_increment),
         status=str(product["status"]),
+        eligible_for_execution=str(product["status"]).upper() == "ONLINE",
         contract_structure=(
             ContractStructure.LINEAR if is_perpetual else ContractStructure.SPOT
         ),

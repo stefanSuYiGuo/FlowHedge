@@ -54,6 +54,7 @@ class InstrumentRules(BaseModel):
     price_precision: int = Field(ge=0)
     quantity_precision: int = Field(ge=0)
     status: str
+    eligible_for_execution: bool = True
     contract_structure: ContractStructure = ContractStructure.SPOT
     contract_multiplier: Decimal = Field(default=Decimal("1"), gt=0)
     contract_value_currency: Optional[str] = None

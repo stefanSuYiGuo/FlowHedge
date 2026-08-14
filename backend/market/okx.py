@@ -114,6 +114,7 @@ def instrument_rules_from_okx(
         price_precision=decimal_precision(tick_size),
         quantity_precision=decimal_precision(quantity_increment),
         status=str(instrument["state"]).upper(),
+        eligible_for_execution=str(instrument["state"]).upper() == "LIVE",
         contract_structure=contract_structure,
         contract_multiplier=contract_multiplier,
         contract_value_currency=contract_value_currency,
