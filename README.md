@@ -4,9 +4,10 @@ FlowHedge is an institutional crypto sales-trading simulator. The current
 checkpoint contains the reviewable trading-terminal layout, a backend-driven
 institutional client-flow simulator, and an accounting chain from RFQ through
 client fill, manual Spot/Perp hedge orders, simulated fills, and desk-state
-updates. RiskPolicy v1 is active, and the public market universe now contains
-six Spot/Perpetual candidates across Kraken, Coinbase, and OKX. Production
-pricing, hedge optimization, smart routing, real execution, and PnL logic
+updates. RiskPolicy v1 and the backend-only Executable Cost Engine v1 are
+active, and the public market universe contains six Spot/Perpetual candidates
+across Kraken, Coinbase, and OKX. Production pricing, derivative carry
+economics, hedge optimization, smart routing, real execution, and PnL logic
 remain deferred.
 
 ## Current layout
@@ -267,7 +268,7 @@ The page renders only the top five levels. The backend separately retains up to
 200 real L2 levels per side where the venue supplies them; it never synthesizes
 or extrapolates missing liquidity. `GET
 /market/executable-books/{venue}/{instrument_type}/{symbol}` exposes that bounded
-book for the future Cost Engine.
+book to the Cost Engine and future optimizer.
 
 Derivative source quantities are converted into BTC equivalent inside the
 market layer from live instrument metadata. Linear contract quantities use the
@@ -285,6 +286,34 @@ until a future hedge horizon is defined.
 USDT≈USD and USDC≈USD are centralized, explicit 1:1 demo assumptions. Stale or
 disconnected books are ineligible, and each adapter fails independently so one
 venue cannot terminate the others.
+
+## Step 8A Executable Cost Engine v1
+
+The backend can now estimate the standalone immediate execution cost of a
+specified desk-side BUY or SELL quantity on any of the six normalized markets.
+Each estimate consumes one atomic executable-market snapshot and sweeps only
+the real BTC-equivalent L2 levels captured in that snapshot. It partially
+consumes the last required level and returns explicit unfilled quantity when
+known depth is insufficient; it never extrapolates liquidity.
+
+The immutable result includes simulated fills, executable VWAP, arrival mid,
+spread cost, depth impact, total price cost, executed quote/USD notional, and
+the snapshot and book timestamps used. USD conversion is explicit: USD uses an
+identity conversion, while USDT and USDC retain their centralized 1:1 demo
+assumption labels.
+
+Taker fees are represented by a centralized configuration model. No fee tier
+has been supplied, so the default result reports `fee_status=UNCONFIGURED`,
+keeps all pre-fee economics available, and leaves all-in values null rather
+than inventing an institutional fee.
+
+- `POST /analytics/execution-cost/estimate` evaluates one standalone market.
+- `POST /analytics/execution-cost/compare` evaluates every registered candidate
+  against one shared snapshot. It does not rank, split, recommend, or optimize.
+
+Step 8A is analytical only: it cannot create hedge orders or fills, mutate desk
+state, change risk, calculate Perpetual carry/funding economics, or perform
+Step 9 optimization. The React dashboard is intentionally unchanged.
 
 ## Validate
 

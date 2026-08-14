@@ -34,6 +34,13 @@ from .domain.validation import (
     calculate_notional_usd,
     validate_client_rfq_notional,
 )
+from .execution_cost import execution_cost_service
+from .execution_cost.models import (
+    ExecutionCostComparisonRequest,
+    ExecutionCostComparisonResult,
+    ExecutionCostRequest,
+    ExecutionCostResult,
+)
 from .market import market_data_service, market_state_store
 from .market.models import (
     ExecutableBookView,
@@ -176,6 +183,32 @@ async def get_unified_market_snapshot(base_asset: str) -> UnifiedMarketSnapshot:
     """Atomically read every registered normalized market for one base asset."""
 
     return await market_state_store.snapshot(base_asset)
+
+
+@app.post(
+    "/analytics/execution-cost/estimate",
+    response_model=ExecutionCostResult,
+    tags=["analytics", "execution-cost"],
+)
+async def estimate_immediate_execution_cost(
+    request: ExecutionCostRequest,
+) -> ExecutionCostResult:
+    """Evaluate one standalone market candidate without creating an order."""
+
+    return await execution_cost_service.estimate(request)
+
+
+@app.post(
+    "/analytics/execution-cost/compare",
+    response_model=ExecutionCostComparisonResult,
+    tags=["analytics", "execution-cost"],
+)
+async def compare_immediate_execution_costs(
+    request: ExecutionCostComparisonRequest,
+) -> ExecutionCostComparisonResult:
+    """Evaluate all registered candidates; do not rank, split, or optimize them."""
+
+    return await execution_cost_service.compare(request)
 
 
 @app.get(

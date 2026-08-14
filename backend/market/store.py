@@ -11,6 +11,7 @@ from ..domain.models import InstrumentType
 from .models import (
     DerivativeMarketContext,
     ExecutableBookView,
+    ExecutableMarketSnapshot,
     ExecutableOrderBook,
     InstrumentRules,
     MarketConnectionState,
@@ -389,7 +390,76 @@ class InMemoryMarketStateStore:
         key = (venue, symbol, instrument_type)
         async with self._lock:
             book = self._executable_books.get(key)
+            instrument = self._instruments.get(key)
             connection = self._connections[self._market_feeds[key]]
+        return self._build_executable_view(
+            key,
+            connection,
+            book,
+            instrument,
+            now=now,
+        )
+
+    async def executable_snapshot(
+        self, base_asset: str | None = None
+    ) -> ExecutableMarketSnapshot:
+        """Atomically capture every normalized input required by the Cost Engine."""
+
+        now = utc_now()
+        normalized_base = base_asset.upper() if base_asset is not None else None
+        async with self._lock:
+            version = self._snapshot_version
+            keys = tuple(
+                key
+                for key in self._market_feeds
+                if normalized_base is None
+                or key[1].split("-", 1)[0] == normalized_base
+            )
+            state = tuple(
+                (
+                    key,
+                    self._connections[self._market_feeds[key]],
+                    self._executable_books.get(key),
+                    self._instruments.get(key),
+                )
+                for key in keys
+            )
+        markets = tuple(
+            self._build_executable_view(
+                key,
+                connection,
+                book,
+                instrument,
+                now=now,
+            )
+            for key, connection, book, instrument in state
+        )
+        return ExecutableMarketSnapshot(
+            snapshot_version=version,
+            captured_at=now,
+            base_asset=normalized_base,
+            markets=tuple(
+                sorted(
+                    markets,
+                    key=lambda market: (
+                        market.venue.value,
+                        market.instrument_type.value,
+                        market.symbol,
+                    ),
+                )
+            ),
+        )
+
+    @staticmethod
+    def _build_executable_view(
+        key: MarketKey,
+        connection: MarketConnectionState,
+        book: ExecutableOrderBook | None,
+        instrument: InstrumentRules | None,
+        *,
+        now: datetime,
+    ) -> ExecutableBookView:
+        venue, symbol, instrument_type = key
         data_age_ms = (
             max(0, int((now - book.received_at).total_seconds() * 1000))
             if book is not None
@@ -407,6 +477,8 @@ class InMemoryMarketStateStore:
             reason = f"FEED_{status.value}"
         elif book is None:
             reason = "EXECUTABLE_BOOK_UNAVAILABLE"
+        elif instrument is None:
+            reason = "INSTRUMENT_METADATA_UNAVAILABLE"
         else:
             reason = None
         return ExecutableBookView(
@@ -415,6 +487,7 @@ class InMemoryMarketStateStore:
             instrument_type=instrument_type,
             connection=connection,
             book=book,
+            instrument=instrument,
             book_data_age_ms=data_age_ms,
             eligible=reason is None,
             exclusion_reason=reason,

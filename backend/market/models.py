@@ -153,6 +153,26 @@ class ExecutableOrderBook(BaseModel):
     received_at: datetime
     source_sequence: Optional[int] = Field(default=None, ge=0)
 
+    @model_validator(mode="after")
+    def levels_must_be_legitimate_and_sorted(self) -> "ExecutableOrderBook":
+        if not self.bids or not self.asks:
+            raise ValueError("an executable order book requires bids and asks")
+        if len(self.bids) > self.max_levels or len(self.asks) > self.max_levels:
+            raise ValueError("executable book levels cannot exceed max_levels")
+        if any(
+            self.bids[index].price < self.bids[index + 1].price
+            for index in range(len(self.bids) - 1)
+        ):
+            raise ValueError("executable bids must be sorted from high to low")
+        if any(
+            self.asks[index].price > self.asks[index + 1].price
+            for index in range(len(self.asks) - 1)
+        ):
+            raise ValueError("executable asks must be sorted from low to high")
+        if self.bids[0].price > self.asks[0].price:
+            raise ValueError("executable best bid cannot exceed best ask")
+        return self
+
 
 class DerivativeMarketContext(BaseModel):
     """Timestamped public derivatives context; missing venue fields remain null."""
@@ -236,7 +256,19 @@ class ExecutableBookView(BaseModel):
     instrument_type: InstrumentType
     connection: MarketConnectionState
     book: Optional[ExecutableOrderBook]
+    instrument: Optional[InstrumentRules] = None
     book_data_age_ms: Optional[int] = Field(default=None, ge=0)
     eligible: bool
     exclusion_reason: Optional[str] = None
     as_of: datetime
+
+
+class ExecutableMarketSnapshot(BaseModel):
+    """Atomic normalized execution inputs without inflating the frontend snapshot."""
+
+    model_config = ConfigDict(frozen=True)
+
+    snapshot_version: int = Field(ge=0)
+    captured_at: datetime
+    base_asset: Optional[str] = None
+    markets: tuple[ExecutableBookView, ...]
