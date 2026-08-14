@@ -20,6 +20,7 @@ from .domain.models import (
     EventType,
     HedgeFill,
     HedgeFillResult,
+    HedgeCancellationResult,
     HedgeOrder,
     HedgeOrderBatchResult,
     HedgeOrderOrigin,
@@ -44,6 +45,7 @@ FIXED_SPOT_HEDGE_SELL_PRICE_USD = Decimal("117995")
 FIXED_PERP_HEDGE_LONG_PRICE_USD = Decimal("118010")
 FIXED_PERP_HEDGE_SHORT_PRICE_USD = Decimal("117990")
 STEP_4_DEMO_TARGET_DELTA_BTC = Decimal("0")
+STEP_4_QUANTITY_INCREMENT_BTC = Decimal("0.01")
 
 
 class DemoStateError(ValueError):
@@ -84,6 +86,7 @@ class DemoTradingService:
         self.processed_fill_results: dict[str, HedgeFillResult] = {}
         self.saved_result: DemoScenarioResult | None = None
         self.saved_order_batch: HedgeOrderBatchResult | None = None
+        self.hedge_order_revision = 0
         return self.desk_state
 
     def _event(
@@ -270,13 +273,18 @@ class DemoTradingService:
     def create_manual_hedge_orders(
         self,
         spot_quantity_btc: Decimal,
-        perp_quantity_btc: Decimal,
         batch_id: str,
     ) -> HedgeOrderBatchResult:
-        """Create a manual Spot/Perp split without changing economic positions."""
+        """Create a manual Spot hedge and calculate the exact Perp remainder."""
 
-        if spot_quantity_btc < 0 or perp_quantity_btc < 0:
-            raise HedgeAllocationError("hedge quantities cannot be negative")
+        if spot_quantity_btc < 0:
+            raise HedgeAllocationError("spot hedge quantity cannot be negative")
+        if spot_quantity_btc != spot_quantity_btc.quantize(
+            STEP_4_QUANTITY_INCREMENT_BTC
+        ):
+            raise HedgeAllocationError(
+                "spot hedge quantity supports at most two decimal places"
+            )
 
         if self.saved_order_batch is not None:
             original_spot = sum(
@@ -284,19 +292,13 @@ class DemoTradingService:
                 for order in self.saved_order_batch.orders
                 if order.instrument_type is InstrumentType.SPOT
             )
-            original_perp = sum(
-                order.quantity_btc
-                for order in self.saved_order_batch.orders
-                if order.instrument_type is InstrumentType.PERPETUAL
-            )
             if (
                 self.saved_order_batch.batch_id == batch_id
                 and original_spot == spot_quantity_btc
-                and original_perp == perp_quantity_btc
             ):
                 return self.saved_order_batch.model_copy(update={"replayed": True})
             raise DemoStateError(
-                "hedge orders already exist; reset the demo to choose a new allocation"
+                "hedge orders already exist; cancel untouched orders or reset the demo"
             )
 
         if self.saved_result is None:
@@ -304,24 +306,26 @@ class DemoTradingService:
 
         before = self.desk_state.model_copy(deep=True)
         required_hedge_delta = STEP_4_DEMO_TARGET_DELTA_BTC - before.total_delta_btc
-        requested_quantity = spot_quantity_btc + perp_quantity_btc
 
         if required_hedge_delta == 0:
             raise DemoStateError("the desk is already at the Step 4 demo target")
-        if requested_quantity != abs(required_hedge_delta):
+        if spot_quantity_btc > abs(required_hedge_delta):
             raise HedgeAllocationError(
-                "spot_quantity_btc + perp_quantity_btc must equal the absolute "
-                f"required hedge delta ({abs(required_hedge_delta)} BTC)"
+                "spot hedge quantity cannot exceed the absolute required hedge delta "
+                f"({abs(required_hedge_delta)} BTC)"
             )
+        perp_quantity_btc = abs(required_hedge_delta) - spot_quantity_btc
 
         created_at = utc_now()
         increasing_delta = required_hedge_delta > 0
         orders: list[HedgeOrder] = []
+        self.hedge_order_revision += 1
+        revision = self.hedge_order_revision
 
         if spot_quantity_btc > 0:
             orders.append(
                 HedgeOrder(
-                    hedge_order_id="hedge-order-step4-spot-001",
+                    hedge_order_id=f"hedge-order-step4-spot-{revision:03}",
                     batch_id=batch_id,
                     origin=HedgeOrderOrigin.MANUAL,
                     venue="DEMO-SPOT",
@@ -339,7 +343,7 @@ class DemoTradingService:
         if perp_quantity_btc > 0:
             orders.append(
                 HedgeOrder(
-                    hedge_order_id="hedge-order-step4-perp-001",
+                    hedge_order_id=f"hedge-order-step4-perp-{revision:03}",
                     batch_id=batch_id,
                     origin=HedgeOrderOrigin.MANUAL,
                     venue="DEMO-PERP",
@@ -404,6 +408,56 @@ class DemoTradingService:
         )
         return self.saved_order_batch
 
+    def cancel_unfilled_hedge_orders(self) -> HedgeCancellationResult:
+        """Cancel an untouched demo hedge batch so the allocation can be revised."""
+
+        if not self.hedge_orders:
+            raise DemoStateError("there are no hedge orders to cancel")
+        if self.hedge_fills or any(
+            order.filled_quantity_btc > 0 for order in self.hedge_orders.values()
+        ):
+            raise DemoStateError(
+                "hedge orders with fills cannot be revised; reset the full demo instead"
+            )
+
+        before = self.desk_state.model_copy(deep=True)
+        cancelled_order_ids = tuple(self.hedge_orders)
+        correlation_id = self.saved_order_batch.batch_id if self.saved_order_batch else ""
+        self.hedge_orders = {}
+        self.saved_order_batch = None
+        cancelled_at = utc_now()
+        self.desk_state = DeskState(
+            version=before.version + 1,
+            as_of=cancelled_at,
+            spot_inventory_btc=before.spot_inventory_btc,
+            derivative_delta_btc=before.derivative_delta_btc,
+            total_delta_btc=before.total_delta_btc,
+            open_hedge_order_ids=(),
+            working_order_delta_btc=Decimal("0"),
+        )
+        cancellation_events = (
+            self._event(
+                EventType.HEDGE_ORDERS_CANCELLED,
+                "desk-btc-hedges",
+                correlation_id,
+                before.version,
+                self.desk_state.version,
+                {"cancelled_hedge_order_ids": cancelled_order_ids},
+            ),
+            self._position_event(
+                correlation_id,
+                before.version,
+                self.desk_state.version,
+                reason="UNFILLED_HEDGE_ORDERS_CANCELLED",
+            ),
+        )
+        return HedgeCancellationResult(
+            cancelled_hedge_order_ids=cancelled_order_ids,
+            desk_state_before=before,
+            desk_state_after=self.desk_state,
+            events=cancellation_events,
+        )
+
     def simulate_hedge_fill(
         self,
         hedge_order_id: str,
@@ -419,6 +473,8 @@ class DemoTradingService:
             return previous.model_copy(update={"replayed": True})
         if quantity_btc <= 0:
             raise HedgeFillError("fill quantity must be positive")
+        if quantity_btc != quantity_btc.quantize(STEP_4_QUANTITY_INCREMENT_BTC):
+            raise HedgeFillError("fill quantity supports at most two decimal places")
 
         order = self.hedge_orders.get(hedge_order_id)
         if order is None:

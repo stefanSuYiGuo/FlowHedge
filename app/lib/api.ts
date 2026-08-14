@@ -2,6 +2,7 @@ import type {
   DemoScenarioResult,
   DeskState,
   FlowEvent,
+  HedgeCancellationResult,
   HedgeFill,
   HedgeFillResult,
   HedgeOrder,
@@ -81,17 +82,21 @@ export function getHedgeFills(): Promise<HedgeFill[]> {
 }
 
 export function createManualHedgeOrders(
-  spotQuantityBtc: number,
-  perpQuantityBtc: number,
+  spotQuantityBtc: string,
 ): Promise<HedgeOrderBatchResult> {
   return request<HedgeOrderBatchResult>("/demo/hedge-orders", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       batch_id: "step4-manual-hedge",
-      spot_quantity_btc: spotQuantityBtc.toString(),
-      perp_quantity_btc: perpQuantityBtc.toString(),
+      spot_quantity_btc: spotQuantityBtc,
     }),
+  });
+}
+
+export function cancelUnfilledHedgeOrders(): Promise<HedgeCancellationResult> {
+  return request<HedgeCancellationResult>("/demo/hedge-orders/cancel", {
+    method: "POST",
   });
 }
 

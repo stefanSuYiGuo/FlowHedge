@@ -135,11 +135,15 @@ button:disabled { opacity: .45; cursor: not-allowed !important; }
 .allocation-summary strong { color: var(--positive); }
 .demo-policy-note { margin: 8px 1px 0; color: var(--muted); font-size: 8px; line-height: 1.45; }
 .decision-actions { margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.decision-actions.three-actions { grid-template-columns: 1.2fr 1fr 1fr; }
 .decision-actions button { padding: 10px; cursor: pointer; font-size: 9px; font-weight: 850; letter-spacing: .04em; }
 .secondary-action { color: var(--ink); background: transparent; border: 1px solid var(--border-strong); }
 .primary-action { color: #001713; background: var(--accent); border: 1px solid var(--accent); }
 .auto-mode-message { margin-top: 10px; padding: 10px; display: flex; align-items: center; gap: 9px; color: var(--positive); border: 1px solid #176d5d; background: var(--accent-soft); font-size: 9px; }
+.simulation-controls { margin-top: 10px; padding: 10px; background: #07131c; border: 1px dashed var(--border-strong); }
+.simulation-controls-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.simulation-controls-heading strong { color: var(--warning); font-size: 8px; letter-spacing: .09em; }
+.simulation-controls-heading span { color: var(--muted); font-size: 8px; text-align: right; }
+.simulation-controls .decision-actions { margin-top: 8px; }
 .hedge-complete { margin-top: 10px; padding: 9px 10px; display: flex; align-items: center; gap: 9px; color: var(--positive); background: var(--accent-soft); border: 1px solid #176d5d; }
 .hedge-complete strong { display: block; font-size: 9px; letter-spacing: .06em; }
 .hedge-complete p { margin: 3px 0 0; color: #8ac8b7; font-size: 8px; line-height: 1.4; }
@@ -202,7 +206,6 @@ button:disabled { opacity: .45; cursor: not-allowed !important; }
   .mode-controls button { flex: 1; }
   .desk-strip { grid-template-columns: repeat(2, 1fr); }
   .quote-section, .allocation-controls { grid-template-columns: 1fr; }
-  .decision-actions.three-actions { grid-template-columns: 1fr; }
   .quote-prices { border-right: 0; border-bottom: 1px solid var(--border); }
   .recommendation-grid { grid-template-columns: repeat(2, 1fr); }
   .active-rfq { align-items: flex-start; flex-direction: column; }

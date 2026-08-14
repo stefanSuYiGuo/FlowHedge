@@ -15,6 +15,13 @@ export type QuoteStatus =
 export type HedgeOrderOrigin = "MANUAL";
 export type HedgeSide = "BUY" | "SELL" | "LONG" | "SHORT";
 export type HedgeOrderStatus = "OPEN" | "PARTIALLY_FILLED" | "FILLED";
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 
 export interface MarketObservation {
   venue: string;
@@ -120,7 +127,7 @@ export interface FlowEvent {
   correlation_id: string;
   desk_state_version_before: number;
   desk_state_version_after: number;
-  payload: Record<string, string | number | boolean | null>;
+  payload: Record<string, JsonValue>;
 }
 
 export interface DemoScenarioResult {
@@ -149,6 +156,13 @@ export interface HedgeFillResult {
   replayed: boolean;
   fill: HedgeFill;
   order: HedgeOrder;
+  desk_state_before: DeskState;
+  desk_state_after: DeskState;
+  events: FlowEvent[];
+}
+
+export interface HedgeCancellationResult {
+  cancelled_hedge_order_ids: string[];
   desk_state_before: DeskState;
   desk_state_after: DeskState;
   events: FlowEvent[];

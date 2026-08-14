@@ -65,6 +65,7 @@ class EventType(str, Enum):
     HEDGE_ORDER_CREATED = "HEDGE_ORDER_CREATED"
     HEDGE_FILL = "HEDGE_FILL"
     HEDGE_ORDER_UPDATED = "HEDGE_ORDER_UPDATED"
+    HEDGE_ORDERS_CANCELLED = "HEDGE_ORDERS_CANCELLED"
     POSITION_UPDATED = "POSITION_UPDATED"
 
 
@@ -256,6 +257,13 @@ class HedgeFillResult(BaseModel):
     replayed: bool
     fill: HedgeFill
     order: HedgeOrder
+    desk_state_before: DeskState
+    desk_state_after: DeskState
+    events: tuple[Event, ...]
+
+
+class HedgeCancellationResult(BaseModel):
+    cancelled_hedge_order_ids: tuple[str, ...]
     desk_state_before: DeskState
     desk_state_after: DeskState
     events: tuple[Event, ...]

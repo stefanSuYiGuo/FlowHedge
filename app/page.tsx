@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  cancelUnfilledHedgeOrders,
   createManualHedgeOrders,
   getDemoScenario,
   getDeskState,
@@ -46,7 +47,7 @@ export default function Home() {
   const [events, setEvents] = useState<FlowEvent[]>([]);
   const [hedgeOrders, setHedgeOrders] = useState<HedgeOrder[]>([]);
   const [hedgeFills, setHedgeFills] = useState<HedgeFill[]>([]);
-  const [spotAllocation, setSpotAllocation] = useState("3.00");
+  const [spotAllocation, setSpotAllocation] = useState("0.10");
   const [busy, setBusy] = useState(false);
   const [apiState, setApiState] = useState<"connecting" | "online" | "offline">(
     "connecting",
@@ -111,20 +112,25 @@ export default function Home() {
   const demoHedgeQuantity = scenario
     ? Math.abs(Number(scenario.desk_state_after.total_delta_btc))
     : 0;
-  const spotAllocationNumber =
-    spotAllocation.trim() === "" ? Number.NaN : Number(spotAllocation);
+  const hasValidSpotPrecision = /^\d+(?:\.\d{0,2})?$/.test(spotAllocation);
+  const spotAllocationNumber = hasValidSpotPrecision
+    ? Number(spotAllocation)
+    : Number.NaN;
   const perpAllocation = Number.isFinite(spotAllocationNumber)
-    ? Number((demoHedgeQuantity - spotAllocationNumber).toFixed(8))
+    ? Math.round((demoHedgeQuantity - spotAllocationNumber) * 100) / 100
     : Number.NaN;
   const validAllocation =
     Number.isFinite(spotAllocationNumber) &&
     spotAllocationNumber >= 0 &&
     spotAllocationNumber <= demoHedgeQuantity;
   const hedgeOrdersCreated = hedgeOrders.length > 0;
+  const canReviseAllocation = hedgeOrdersCreated && hedgeFills.length === 0;
   const allHedgeOrdersFilled =
     hedgeOrdersCreated && hedgeOrders.every((order) => order.status === "FILLED");
   const canSimulateHalfFill = hedgeOrders.some(
-    (order) => Number(order.filled_quantity_btc) === 0,
+    (order) =>
+      Number(order.filled_quantity_btc) === 0 &&
+      Math.floor((Number(order.quantity_btc) * 100) / 2) > 0,
   );
   const canFillRemainder = hedgeOrders.some(
     (order) => Number(order.remaining_quantity_btc) > 0,
@@ -197,7 +203,7 @@ export default function Home() {
       setEvents([]);
       setHedgeOrders([]);
       setHedgeFills([]);
-      setSpotAllocation("3.00");
+      setSpotAllocation("0.10");
       setStage("idle");
       setApiState("online");
     } catch {
@@ -215,7 +221,7 @@ export default function Home() {
     setNotice(null);
 
     try {
-      await createManualHedgeOrders(spotAllocationNumber, perpAllocation);
+      await createManualHedgeOrders(spotAllocation);
       await refreshHedgeState();
       setApiState("online");
       setNotice(
@@ -223,6 +229,24 @@ export default function Home() {
       );
     } catch (caught) {
       setError(apiErrorMessage(caught, "The manual hedge allocation could not be created."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCancelAndRevise() {
+    if (busy || !canReviseAllocation) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+
+    try {
+      await cancelUnfilledHedgeOrders();
+      await refreshHedgeState();
+      setApiState("online");
+      setNotice("Unfilled hedge orders cancelled — the allocation is editable again.");
+    } catch (caught) {
+      setError(apiErrorMessage(caught, "The hedge allocation could not be revised."));
     } finally {
       setBusy(false);
     }
@@ -237,15 +261,18 @@ export default function Home() {
     try {
       for (const order of hedgeOrders) {
         if (Number(order.filled_quantity_btc) !== 0) continue;
+        const partialQuantity =
+          Math.floor((Number(order.quantity_btc) * 100) / 2) / 100;
+        if (partialQuantity <= 0) continue;
         await simulateHedgeFill(
           order.hedge_order_id,
-          Number(order.quantity_btc) / 2,
+          partialQuantity,
           `${order.hedge_order_id}-half`,
         );
       }
       await refreshHedgeState();
       setApiState("online");
-      setNotice("50% simulated fills applied — actual and working delta moved together.");
+      setNotice("Partial demo fills applied — actual and working delta moved together.");
     } catch (caught) {
       await refreshHedgeState().catch(() => undefined);
       setError(apiErrorMessage(caught, "The partial fills could not be completed."));
@@ -492,16 +519,27 @@ export default function Home() {
 
                 <div className={`allocation-controls ${hedgeOrdersCreated ? "locked" : ""}`}>
                   <label>
-                    <span>SPOT HEDGE · BTC</span>
+                    <span>SPOT HEDGE · BTC · MAX 2 DECIMALS</span>
                     <input
                       aria-label="Spot hedge quantity in BTC"
                       disabled={busy || hedgeOrdersCreated}
+                      inputMode="decimal"
                       min="0"
                       max={demoHedgeQuantity}
-                      step="0.25"
+                      step="0.01"
                       type="number"
                       value={spotAllocation}
-                      onChange={(event) => setSpotAllocation(event.target.value)}
+                      onBlur={() => {
+                        if (validAllocation) {
+                          setSpotAllocation(spotAllocationNumber.toFixed(2));
+                        }
+                      }}
+                      onChange={(event) => {
+                        const nextValue = event.target.value;
+                        if (nextValue === "" || /^\d*(?:\.\d{0,2})?$/.test(nextValue)) {
+                          setSpotAllocation(nextValue);
+                        }
+                      }}
                     />
                   </label>
                   <label>
@@ -526,10 +564,10 @@ export default function Home() {
                   <span>Target <strong>0.00 BTC</strong></span>
                 </div>
                 <p className="demo-policy-note">
-                  This is an explicit demo target, not a Risk Policy recommendation. Orders affect working and projected delta; only fills affect actual positions.
+                  Enter the editable Spot quantity; the backend calculates the exact Perp remainder. This is an explicit demo target, not a Risk Policy recommendation.
                 </p>
 
-                <div className="decision-actions three-actions">
+                <div className="decision-actions">
                   <button
                     className="primary-action"
                     disabled={busy || hedgeOrdersCreated || !validAllocation}
@@ -540,20 +578,37 @@ export default function Home() {
                   </button>
                   <button
                     className="secondary-action"
-                    disabled={busy || !canSimulateHalfFill}
-                    onClick={handleHalfFills}
+                    disabled={busy || !canReviseAllocation}
+                    onClick={handleCancelAndRevise}
                     type="button"
                   >
-                    SIMULATE 50% FILLS
+                    CANCEL &amp; EDIT ALLOCATION
                   </button>
-                  <button
-                    className="secondary-action"
-                    disabled={busy || !canFillRemainder}
-                    onClick={handleFillRemainder}
-                    type="button"
-                  >
-                    FILL REMAINDER
-                  </button>
+                </div>
+
+                <div className="simulation-controls">
+                  <div className="simulation-controls-heading">
+                    <strong>DEMO FILL CONTROLS</strong>
+                    <span>Temporary controls — future fills arrive from exchange execution reports.</span>
+                  </div>
+                  <div className="decision-actions">
+                    <button
+                      className="secondary-action"
+                      disabled={busy || !canSimulateHalfFill}
+                      onClick={handleHalfFills}
+                      type="button"
+                    >
+                      SIMULATE PARTIAL FILLS (~50%)
+                    </button>
+                    <button
+                      className="secondary-action"
+                      disabled={busy || !canFillRemainder}
+                      onClick={handleFillRemainder}
+                      type="button"
+                    >
+                      FILL REMAINDER
+                    </button>
+                  </div>
                 </div>
 
                 {allHedgeOrdersFilled && (
@@ -699,6 +754,8 @@ function describeEvent(event: FlowEvent, scenario: DemoScenarioResult | null): s
       return `${String(event.payload.instrument_type)} ${String(event.payload.side)} ${formatBtc(payloadNumber(event, "quantity_btc"))} @ ${formatUsd(payloadNumber(event, "fill_price_usd"))}`;
     case "HEDGE_ORDER_UPDATED":
       return `${String(event.payload.status).replace("_", " ")} · ${formatBtc(payloadNumber(event, "remaining_quantity_btc"))} remaining`;
+    case "HEDGE_ORDERS_CANCELLED":
+      return "Unfilled hedge orders cancelled · allocation returned to draft";
     case "POSITION_UPDATED":
       return `Actual ${formatBtc(payloadNumber(event, "total_delta_btc"))} · working ${formatBtc(payloadNumber(event, "working_order_delta_btc"))} · state v${event.desk_state_version_after}`;
     default:

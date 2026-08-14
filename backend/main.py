@@ -19,6 +19,7 @@ from .domain.models import (
     DemoScenarioResult,
     DeskState,
     Event,
+    HedgeCancellationResult,
     HedgeFill,
     HedgeFillResult,
     HedgeOrder,
@@ -66,7 +67,6 @@ class RFQValidationResponse(BaseModel):
 class ManualHedgeOrderRequest(BaseModel):
     batch_id: str = Field(min_length=1, max_length=100)
     spot_quantity_btc: Decimal = Field(ge=0)
-    perp_quantity_btc: Decimal = Field(ge=0)
 
 
 class SimulatedHedgeFillRequest(BaseModel):
@@ -143,11 +143,24 @@ async def create_manual_hedge_orders(
     try:
         return demo_service.create_manual_hedge_orders(
             request.spot_quantity_btc,
-            request.perp_quantity_btc,
             request.batch_id,
         )
     except HedgeAllocationError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    except DemoStateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.post(
+    "/demo/hedge-orders/cancel",
+    response_model=HedgeCancellationResult,
+    tags=["demo", "hedging"],
+)
+async def cancel_unfilled_hedge_orders() -> HedgeCancellationResult:
+    """Cancel untouched hedge orders and return the allocation to draft state."""
+
+    try:
+        return demo_service.cancel_unfilled_hedge_orders()
     except DemoStateError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
