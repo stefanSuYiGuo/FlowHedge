@@ -101,3 +101,16 @@ def test_fixed_scenario_is_auto_accepted_and_updates_position_once() -> None:
     assert service.desk_state.version == 1
     assert service.desk_state.total_delta_btc == Decimal("-5")
     assert len(service.events) == 6
+
+
+def test_reset_clears_the_booked_scenario_and_event_ledger() -> None:
+    service = DemoTradingService()
+    service.run_fixed_client_trade()
+
+    reset_state = service.reset()
+
+    assert reset_state.version == 0
+    assert reset_state.total_delta_btc == Decimal("0")
+    assert service.saved_result is None
+    assert service.events == []
+    assert service.processed_trade_ids == set()

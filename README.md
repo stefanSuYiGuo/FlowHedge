@@ -67,6 +67,23 @@ rules before the UI is connected:
 
 The fixture quote is not the future pricing engine.
 
+## Step 3 frontend integration
+
+The React terminal now reads the fixed scenario from FastAPI instead of showing
+invented trading results. Use **Inject RFQ** to replay the backend event chain:
+
+`PRICING → AUTO-ACCEPTED → CLIENT FILLED → POSITION UPDATED`
+
+The first run moves the desk from flat to `-5 BTC` spot inventory and total
+delta. A repeated run is identified as a replay and cannot book the same client
+trade twice. **Reset Demo** returns the backend and UI to version zero.
+
+Risk state, hedge recommendations, hedge orders, and PnL remain visibly marked
+as unavailable until their accounting steps are implemented.
+
+The frontend defaults to `http://127.0.0.1:8000`. To use a different local API,
+set `NEXT_PUBLIC_FLOWHEDGE_API_URL` before starting the frontend.
+
 ## Validate
 
 ```bash

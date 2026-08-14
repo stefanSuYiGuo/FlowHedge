@@ -24,5 +24,11 @@ test("server-renders the FlowHedge terminal shell", async () => {
   assert.match(html, /Hedge Decision Workspace/);
   assert.match(html, /RFQ Inbox/);
   assert.match(html, /Orders arrive asynchronously/);
+  assert.match(html, /RISK POLICY NOT CONFIGURED/);
+  assert.match(html, /PnL accounting unavailable/);
+  assert.match(html, /No hedge orders/);
+  assert.match(html, /INJECT RFQ/);
+  assert.match(html, /RESET DEMO/);
+  assert.doesNotMatch(html, /\+\$9,390|YELLOW · PARTIAL HEDGE/);
   assert.doesNotMatch(html, /Next client RFQ|countdown|codex-preview/i);
 });

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -92,6 +93,17 @@ async def reset_demo() -> DeskState:
     """Reset the deterministic demo ledger to a flat version-zero desk state."""
 
     return demo_service.reset()
+
+
+@app.get(
+    "/demo/scenario",
+    response_model=Optional[DemoScenarioResult],
+    tags=["demo"],
+)
+async def get_demo_scenario() -> Optional[DemoScenarioResult]:
+    """Return the booked demo scenario, or null after a reset."""
+
+    return demo_service.saved_result
 
 
 @app.get("/desk/state", response_model=DeskState, tags=["desk"])
