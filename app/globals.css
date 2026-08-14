@@ -74,7 +74,7 @@ button:disabled { opacity: .45; cursor: not-allowed !important; }
 .market-data-panel { max-height: 480px; }
 .market-data-panel .live-market-panel { max-height: 444px; overflow-y: auto; scrollbar-color: var(--border-strong) transparent; }
 .rfq-inbox-panel { min-height: 300px; display: flex; flex-direction: column; }
-.rfq-inbox-panel .rfq-list { min-height: 0; max-height: none; flex: 1; }
+.rfq-inbox-panel .rfq-list { min-height: 0; max-height: none; flex: 1; align-content: start; grid-auto-rows: max-content; }
 
 .market-table { width: 100%; border-collapse: collapse; font: 9px var(--font-geist-mono), monospace; }
 .market-table th, .market-table td { padding: 7px 8px; text-align: right; border-bottom: 1px solid #142532; }
