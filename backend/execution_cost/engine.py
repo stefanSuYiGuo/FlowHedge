@@ -26,6 +26,46 @@ BASIS_POINTS = Decimal("10000")
 USD_IDENTITY_ASSUMPTION = "USD_IDENTITY"
 
 
+def execution_price_cost_bps(
+    side: ExecutionSide,
+    execution_price: Decimal,
+    arrival_mid: Decimal,
+) -> Decimal:
+    """Return signed desk cost for one execution price using Step 8A semantics."""
+
+    if execution_price <= 0 or arrival_mid <= 0:
+        raise ValueError("execution price and arrival mid must be positive")
+    price_difference = (
+        execution_price - arrival_mid
+        if side is ExecutionSide.BUY
+        else arrival_mid - execution_price
+    )
+    return price_difference / arrival_mid * BASIS_POINTS
+
+
+def marginal_execution_cost_usd_per_btc(
+    *,
+    side: ExecutionSide,
+    execution_price: Decimal,
+    arrival_mid: Decimal,
+    usd_conversion_rate: Decimal,
+    taker_fee_bps: Decimal,
+) -> Decimal:
+    """Normalized one-level economics reused by the Step 9 marginal allocator."""
+
+    price_cost_bps = execution_price_cost_bps(
+        side,
+        execution_price,
+        arrival_mid,
+    )
+    return (
+        execution_price
+        * usd_conversion_rate
+        * (price_cost_bps + taker_fee_bps)
+        / BASIS_POINTS
+    )
+
+
 def estimate_execution_cost(
     request: ExecutionCostRequest,
     snapshot: ExecutableMarketSnapshot,
@@ -101,16 +141,16 @@ def estimate_execution_cost(
         depth_impact_bps = (
             (sweep.execution_vwap - best_ask) / arrival_mid * BASIS_POINTS
         )
-        total_price_cost_bps = (
-            (sweep.execution_vwap - arrival_mid) / arrival_mid * BASIS_POINTS
+        total_price_cost_bps = execution_price_cost_bps(
+            request.side, sweep.execution_vwap, arrival_mid
         )
     else:
         spread_cost_bps = (arrival_mid - best_bid) / arrival_mid * BASIS_POINTS
         depth_impact_bps = (
             (best_bid - sweep.execution_vwap) / arrival_mid * BASIS_POINTS
         )
-        total_price_cost_bps = (
-            (arrival_mid - sweep.execution_vwap) / arrival_mid * BASIS_POINTS
+        total_price_cost_bps = execution_price_cost_bps(
+            request.side, sweep.execution_vwap, arrival_mid
         )
 
     executed_notional_usd = (
