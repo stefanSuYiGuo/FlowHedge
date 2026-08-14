@@ -117,6 +117,26 @@ class DemoTradingService:
         self.events.append(event)
         return event
 
+    def record_system_event(
+        self,
+        event_type: EventType,
+        *,
+        aggregate_id: str,
+        correlation_id: object,
+        payload: dict[str, object],
+    ) -> Event:
+        """Append a non-position-changing lifecycle event to the demo tape."""
+
+        version = self.desk_state.version
+        return self._event(
+            event_type,
+            aggregate_id,
+            str(correlation_id),
+            version,
+            version,
+            payload,
+        )
+
     def run_fixed_client_trade(self) -> DemoScenarioResult:
         """Run the fixed valid RFQ once; subsequent calls are idempotent replays."""
 

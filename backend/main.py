@@ -20,7 +20,6 @@ from .demo import (
 from .domain.models import (
     ClientFlowState,
     DemoScenarioResult,
-    DemoWorkspaceState,
     DeskState,
     Event,
     HedgeCancellationResult,
@@ -37,11 +36,14 @@ from .domain.validation import (
 )
 from .market import market_data_service, market_state_store
 from .market.models import (
+    ExecutableBookView,
     MarketConnectionState,
     MarketStateView,
     MarketVenue,
     UnifiedMarketSnapshot,
 )
+from .risk import risk_service
+from .risk.models import RiskAssessment, RiskAwareDemoWorkspaceState
 
 
 @asynccontextmanager
@@ -50,9 +52,11 @@ async def lifespan(_: FastAPI):
 
     await market_data_service.start()
     await client_flow_service.start()
+    await risk_service.start()
     try:
         yield
     finally:
+        await risk_service.stop()
         await client_flow_service.stop()
         await market_data_service.stop()
 
@@ -134,6 +138,31 @@ async def get_typed_market_book(
             ),
         )
     return await market_state_store.view(
+        market_venue, canonical_symbol, market_instrument_type
+    )
+
+
+@app.get(
+    "/market/executable-books/{venue}/{instrument_type}/{symbol}",
+    response_model=ExecutableBookView,
+    tags=["market-data"],
+)
+async def get_executable_market_book(
+    venue: str, instrument_type: str, symbol: str
+) -> ExecutableBookView:
+    """Return bounded legitimate L2 depth for the future Execution Cost Engine."""
+
+    try:
+        market_venue = MarketVenue(venue.upper())
+        market_instrument_type = InstrumentType(instrument_type.upper())
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail="unsupported market identity") from error
+    canonical_symbol = symbol.upper()
+    if not market_data_service.supports(
+        market_venue, canonical_symbol, market_instrument_type
+    ):
+        raise HTTPException(status_code=404, detail="unsupported executable market")
+    return await market_state_store.executable_view(
         market_venue, canonical_symbol, market_instrument_type
     )
 
@@ -222,15 +251,17 @@ async def run_fixed_client_trade() -> DemoScenarioResult:
 
 @app.get(
     "/demo/workspace",
-    response_model=DemoWorkspaceState,
+    response_model=RiskAwareDemoWorkspaceState,
     tags=["demo", "client-flow"],
 )
-async def get_demo_workspace() -> DemoWorkspaceState:
+async def get_demo_workspace() -> RiskAwareDemoWorkspaceState:
     """Return one coherent view for the continuously updating trading screen."""
 
-    return DemoWorkspaceState(
+    assessment = await risk_service.assess()
+    return RiskAwareDemoWorkspaceState(
         client_flow=client_flow_service.state(),
         desk_state=demo_service.desk_state,
+        risk_assessment=assessment,
         hedge_orders=tuple(demo_service.archived_hedge_orders)
         + tuple(demo_service.hedge_orders.values()),
         hedge_fills=tuple(demo_service.hedge_fills),
@@ -275,7 +306,19 @@ async def reset_demo() -> DeskState:
     """Clear all client/hedge state and restart the slow arrival schedule."""
 
     client_flow_service.reset()
+    risk_service.reset()
     return demo_service.desk_state
+
+
+@app.get(
+    "/risk/assessment",
+    response_model=RiskAssessment,
+    tags=["risk"],
+)
+async def get_risk_assessment() -> RiskAssessment:
+    """Return RiskPolicy v1 output without creating hedge orders or changing positions."""
+
+    return await risk_service.assess()
 
 
 @app.get(

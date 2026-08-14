@@ -21,6 +21,7 @@ import type {
   HedgeOrder,
   MarketStateView,
   PendingClientFlow,
+  RiskAssessment,
   UnifiedMarketSnapshot,
 } from "./lib/types";
 
@@ -43,6 +44,7 @@ export default function Home() {
   const [pendingRfqs, setPendingRfqs] = useState<PendingClientFlow[]>([]);
   const [completedFlowCount, setCompletedFlowCount] = useState(0);
   const [deskState, setDeskState] = useState<DeskState>(flatDeskState);
+  const [riskAssessment, setRiskAssessment] = useState<RiskAssessment | null>(null);
   const [events, setEvents] = useState<FlowEvent[]>([]);
   const [hedgeOrders, setHedgeOrders] = useState<HedgeOrder[]>([]);
   const [hedgeFills, setHedgeFills] = useState<HedgeFill[]>([]);
@@ -63,6 +65,7 @@ export default function Home() {
 
   const applyWorkspace = useCallback((workspace: DemoWorkspaceState) => {
     setDeskState(workspace.desk_state);
+    setRiskAssessment(workspace.risk_assessment);
     setEvents(workspace.events);
     setHedgeOrders(workspace.hedge_orders);
     setHedgeFills(workspace.hedge_fills);
@@ -144,17 +147,24 @@ export default function Home() {
     : (selectedMarketState?.connection.status ?? "CONNECTING");
   const liveBook = krakenSpotState?.book ?? null;
   const liveMidPrice = liveBook ? Number(liveBook.mid_price) : null;
-  const deltaMarkPrice = liveMidPrice ?? (
-    scenario ? Number(scenario.market_snapshot.reference_price_usd) : null
-  );
   const marketStatus = marketPollFailed
     ? "DISCONNECTED"
     : (krakenSpotState?.connection.status ?? "CONNECTING");
   const totalDelta = Number(deskState.total_delta_btc);
   const workingDelta = Number(deskState.working_order_delta_btc);
   const projectedDelta = totalDelta + workingDelta;
-  const deltaNotional =
-    deltaMarkPrice === null ? null : totalDelta * deltaMarkPrice;
+  const deltaNotional = riskAssessment?.signed_delta_notional_usd === null || !riskAssessment
+    ? null
+    : Number(riskAssessment.signed_delta_notional_usd);
+  const riskTargetDelta = riskAssessment?.target_delta_btc === null || !riskAssessment
+    ? null
+    : Number(riskAssessment.target_delta_btc);
+  const grossRiskHedge = riskAssessment?.gross_required_hedge_delta_btc === null || !riskAssessment
+    ? null
+    : Number(riskAssessment.gross_required_hedge_delta_btc);
+  const remainingRiskHedge = riskAssessment?.remaining_hedge_requirement_btc === null || !riskAssessment
+    ? null
+    : Number(riskAssessment.remaining_hedge_requirement_btc);
   const activeHedgeOrders = hedgeOrders.filter((order) => order.status !== "FILLED");
   const hedgeOrdersCreated = activeHedgeOrders.length > 0;
   const activeBatchId = activeHedgeOrders[0]?.batch_id ?? null;
@@ -260,6 +270,7 @@ export default function Home() {
     try {
       const resetState = await resetDemo();
       setDeskState(resetState);
+      setRiskAssessment(null);
       setCompletedScenarios([]);
       setPendingRfqs([]);
       setCompletedFlowCount(0);
@@ -436,6 +447,17 @@ export default function Home() {
         <div className="api-error" role="alert">{backendError ?? error}</div>
       )}
       {notice && <div className="api-notice" role="status">{notice}</div>}
+      {riskAssessment?.risk_band === "RED" && (
+        <div className="hard-breach-banner" role="alert">
+          <strong>HARD LIMIT BREACH</strong>
+          <span>
+            {riskAssessment.auto_hedge_required
+              ? "AUTO HEDGE REQUIRED · HEDGE OPTIMIZER NOT YET WIRED"
+              : `AUTO HEDGE IN ${Number(riskAssessment.hard_breach_seconds_remaining ?? "0").toFixed(1)}s`}
+          </span>
+          <small>{formatCompactUsd(Number(riskAssessment.absolute_delta_exposure_usd ?? "0"))} ACTUAL EXPOSURE · DEMO DESK ASSUMPTIONS</small>
+        </div>
+      )}
 
       <section className="desk-strip" aria-label="Desk summary">
         <Metric label="Net delta" value={formatBtc(totalDelta)} />
@@ -475,7 +497,10 @@ export default function Home() {
                       >
                         <span>
                           <strong>{market.venue}</strong>
-                          <small>{market.instrument_type === "PERPETUAL" ? "PERP · USDC" : "SPOT · USD"}</small>
+                          <small>
+                            {market.instrument_type === "PERPETUAL" ? "PERP" : "SPOT"}
+                            {` · ${market.instrument?.quote_asset ?? "—"}`}
+                          </small>
                         </span>
                         <span className="venue-touch">
                           <strong>{market.book ? formatUsd(Number(market.book.mid_price)) : "—"}</strong>
@@ -515,20 +540,38 @@ export default function Home() {
                       </tbody>
                     </table>
                     <div className="market-metadata">
-                      <span>BOOK L2 · DEPTH {selectedBook.depth}</span>
+                      <span>DISPLAY L2 · DEPTH {Math.min(5, selectedBook.depth)}</span>
+                      <span>EXECUTABLE L2 · {selectedMarketState?.executable_bid_levels ?? 0}/{selectedMarketState?.executable_ask_levels ?? 0}</span>
                       <span>{selectedBook.checksum !== null ? `CRC ${selectedBook.checksum}` : `SEQ ${selectedBook.source_sequence ?? "—"}`}</span>
                       <span>
                         {selectedMarketState?.instrument
-                          ? `TICK ${selectedMarketState.instrument.price_increment} · MIN ${selectedMarketState.instrument.quantity_min} BTC`
+                          ? `TICK ${selectedMarketState.instrument.price_increment} · MIN ${selectedMarketState.instrument.quantity_min} ${selectedMarketState.instrument.native_quantity_unit}`
                           : "INSTRUMENT METADATA LOADING"}
                       </span>
                       {selectedMarketState?.instrument?.usd_conversion_assumption && (
-                        <span>USDC≈USD · 1:1 DEMO ASSUMPTION</span>
+                        <span>{selectedMarketState.instrument.quote_asset}≈USD · 1:1 DEMO ASSUMPTION</span>
                       )}
                       {selectedMarketState?.instrument_type === "PERPETUAL" && (
-                        <span>FUNDING COST · DEFERRED</span>
+                        <span>
+                          {selectedMarketState.instrument
+                            ? `${selectedMarketState.instrument.contract_structure} · MULT ${selectedMarketState.instrument.contract_multiplier} ${selectedMarketState.instrument.contract_value_currency ?? ""}`
+                            : "CONTRACT METADATA LOADING"}
+                        </span>
+                      )}
+                      {selectedMarketState?.derivatives && (
+                        <span>DERIVATIVES DATA · {selectedMarketState.derivative_data_stale ? "STALE" : "FRESH"}</span>
                       )}
                     </div>
+                    {selectedMarketState?.instrument_type === "PERPETUAL" && (
+                      <div className="derivatives-context">
+                        <div><small>MARK</small><strong>{optionalUsd(selectedMarketState.derivatives?.mark_price)}</strong></div>
+                        <div><small>INDEX</small><strong>{optionalUsd(selectedMarketState.derivatives?.index_price)}</strong></div>
+                        <div><small>FUNDING</small><strong>{formatOptionalRate(selectedMarketState.derivatives?.current_funding_rate)}</strong></div>
+                        <div><small>OPEN INTEREST</small><strong>{formatOptionalBtc(selectedMarketState.derivatives?.open_interest_btc_equivalent)}</strong></div>
+                        <div><small>BASIS</small><strong>{formatOptionalBps(selectedMarketState.derivatives?.basis_bps)}</strong></div>
+                        <div><small>FUNDING COST</small><strong>DEFERRED</strong></div>
+                      </div>
+                    )}
                   </>
                 ) : (
                   <EmptyState
@@ -541,7 +584,7 @@ export default function Home() {
               <EmptyState
                 title={marketPollFailed ? "Market API disconnected" : "Waiting for market feeds"}
                 detail={
-                  "Kraken and Coinbase public adapters are connecting to their first normalized books."
+                  "Kraken, Coinbase, and OKX public adapters are connecting to their first normalized books."
                 }
               />
             )}
@@ -653,7 +696,7 @@ export default function Home() {
 
           <Panel
             title="Hedge Decision Workspace · Simulated Execution"
-            meta={mode === "manual" ? "MANUAL MODE · STEP 6" : "AUTO MODE · DEFERRED"}
+            meta={mode === "manual" ? "MANUAL MODE · STEP 7" : "AUTO RISK CONTROL · NO OPTIMIZER"}
             grow
           >
             {!scenario ? (
@@ -663,12 +706,27 @@ export default function Home() {
                 roomy
               />
             ) : mode === "auto" ? (
-              <UnavailableFeature
-                title="Automatic hedging is intentionally deferred"
-                detail="This step verifies execution accounting only. A future Risk Policy will decide how much to hedge, then the Hedge Optimizer will decide how to hedge it."
-              />
+              <div className="hedge-workspace">
+                <div className="recommendation-grid risk-recommendation">
+                  <div><small>RISK BAND</small><strong>{riskAssessment?.risk_band ?? "UNAVAILABLE"}</strong></div>
+                  <div><small>POLICY TARGET</small><strong>{riskTargetDelta === null ? "—" : formatBtc(riskTargetDelta)}</strong></div>
+                  <div><small>GROSS REQUIREMENT</small><strong>{grossRiskHedge === null ? "—" : formatBtc(grossRiskHedge)}</strong></div>
+                  <div><small>REMAINING AFTER WORKING</small><strong>{remainingRiskHedge === null ? "—" : formatBtc(remainingRiskHedge)}</strong></div>
+                </div>
+                <UnavailableFeature
+                  title="RiskPolicy is active; automatic execution is not"
+                  detail="RiskPolicy decides how much exposure should be removed and can raise AUTO_HEDGE_REQUIRED after a persistent RED breach. Step 7 deliberately creates no hedge plan or order because the Hedge Optimizer is not implemented yet."
+                  compact
+                />
+              </div>
             ) : (
               <div className="hedge-workspace">
+                <div className="recommendation-grid risk-recommendation">
+                  <div><small>RISK BAND · ACTION</small><strong>{riskAssessment ? `${riskAssessment.risk_band} · ${riskAssessment.action.replaceAll("_", " ")}` : "UNAVAILABLE"}</strong></div>
+                  <div><small>POLICY TARGET</small><strong>{riskTargetDelta === null ? "—" : formatBtc(riskTargetDelta)}</strong></div>
+                  <div><small>GROSS REQUIREMENT</small><strong>{grossRiskHedge === null ? "—" : formatBtc(grossRiskHedge)}</strong></div>
+                  <div><small>REMAINING AFTER WORKING</small><strong>{remainingRiskHedge === null ? "—" : formatBtc(remainingRiskHedge)}</strong></div>
+                </div>
                 <div className="recommendation-grid">
                   <div>
                     <small>{hedgeOrdersCreated ? "CURRENT ORDERS PROJECT TO" : "DRAFT PROJECTED DELTA"}</small>
@@ -764,7 +822,7 @@ export default function Home() {
                   <span>Projected <strong>{formatBtc(hedgeOutcomeDelta)}</strong></span>
                 </div>
                 <p className="demo-policy-note">
-                  Enter Spot and Perp quantities independently. A partial hedge may intentionally leave residual exposure; the combined quantity cannot exceed the current exposure. This is a manual decision, not a Risk Policy or Hedge Optimizer recommendation. New client fills remain independent and can move projected delta while these orders are still working.
+                  RiskPolicy decides the policy target and remaining requirement above; it does not choose Spot, Perp, or venue. Enter Spot and Perp quantities independently. A trader may intentionally differ from the policy output, while the existing manual safety control prevents crossing through flat. This is not a Hedge Optimizer recommendation. New client fills remain independent and can move projected delta while orders are working.
                 </p>
 
                 <div className={`market-candidate ${marketStatus !== "LIVE" ? "unavailable" : ""}`}>
@@ -867,7 +925,12 @@ export default function Home() {
         </section>
 
         <aside className="right-rail">
-          <Panel title="Position & Risk" meta="RISK POLICY NOT CONFIGURED">
+          <Panel
+            title="Position & Risk"
+            meta={riskAssessment
+              ? `${riskAssessment.risk_band} · ${riskAssessment.action.replaceAll("_", " ")}`
+              : "RISK REFERENCE LOADING"}
+          >
             <div className="position-panel">
               <div className="position-heading">
                 <div><span className="eyebrow">Current total delta</span><strong>{formatBtc(totalDelta)}</strong></div>
@@ -878,8 +941,26 @@ export default function Home() {
                 <div><small>DERIVATIVE DELTA</small><strong>{formatBtc(Number(deskState.derivative_delta_btc))}</strong></div>
                 <div><small>WORKING ORDER DELTA</small><strong>{formatBtc(Number(deskState.working_order_delta_btc))}</strong></div>
                 <div><small>PROJECTED DELTA</small><strong>{formatBtc(projectedDelta)}</strong></div>
+                <div><small>POLICY TARGET</small><strong>{riskTargetDelta === null ? "—" : formatBtc(riskTargetDelta)}</strong></div>
+                <div><small>REMAINING HEDGE</small><strong>{remainingRiskHedge === null ? "—" : formatBtc(remainingRiskHedge)}</strong></div>
               </div>
-              <p className="future-note">Desk state v{deskState.version}. Soft/hard limits and GREEN/YELLOW/RED logic are intentionally deferred.</p>
+              <div className={`risk-status risk-${(riskAssessment?.risk_band ?? "unavailable").toLowerCase()}`}>
+                <strong>{riskAssessment?.risk_band ?? "UNAVAILABLE"}</strong>
+                <span>{riskAssessment?.action.replaceAll("_", " ") ?? "HOLD"}</span>
+                <small>
+                  {riskAssessment?.absolute_delta_exposure_usd
+                    ? `${formatCompactUsd(Number(riskAssessment.absolute_delta_exposure_usd))} ABSOLUTE EXPOSURE`
+                    : "USD SPOT RISK REFERENCE UNAVAILABLE"}
+                </small>
+              </div>
+              {(riskAssessment?.working_order_conflict || riskAssessment?.working_order_overhedge) && (
+                <p className="risk-guard" role="alert">
+                  {riskAssessment.auto_hedge_blocked_reasons.join(" · ").replaceAll("_", " ")}
+                </p>
+              )}
+              <p className="future-note">
+                {riskAssessment?.assumption_label ?? "DEMO DESK ASSUMPTIONS"}: soft $1.0M, hard $3.0M, RED target flat, 5-second grace. These are not OSL internal limits. Inventory / settlement: {riskAssessment?.inventory_or_settlement_state ?? "NOT EVALUATED"}.
+              </p>
             </div>
           </Panel>
 
@@ -920,8 +1001,8 @@ export default function Home() {
       </section>
 
       <footer className="terminal-footer">
-        <span>LIVE MARKET: KRAKEN + COINBASE SPOT/PERP · DEMO CLIENT QUOTE · SIMULATED HEDGE EXECUTION</span>
-        <span>{flowActive ? "FLOW ACTIVE" : "FLOW PAUSED"} · {mode === "manual" ? "MANUAL HEDGE" : "AUTO DEFERRED"}</span>
+        <span>LIVE MARKET: KRAKEN + COINBASE + OKX SPOT/PERP · RISK POLICY V1 · SIMULATED HEDGE EXECUTION</span>
+        <span>{flowActive ? "FLOW ACTIVE" : "FLOW PAUSED"} · {mode === "manual" ? "MANUAL HEDGE" : "AUTO CONTROL · OPTIMIZER DEFERRED"}</span>
       </footer>
     </main>
   );
@@ -988,6 +1069,14 @@ function describeEvent(event: FlowEvent): string {
       return "Unfilled hedge orders cancelled · allocation returned to draft";
     case "POSITION_UPDATED":
       return `Actual ${formatBtc(payloadNumber(event, "total_delta_btc"))} · working ${formatBtc(payloadNumber(event, "working_order_delta_btc"))} · state v${event.desk_state_version_after}`;
+    case "RISK_RED":
+      return `${formatCompactUsd(payloadNumber(event, "absolute_delta_exposure_usd"))} exceeded ${formatCompactUsd(payloadNumber(event, "hard_delta_limit_usd"))} hard limit`;
+    case "AUTO_HEDGE_ARMED":
+      return `${payloadNumber(event, "grace_seconds").toFixed(0)}-second risk-control countdown started`;
+    case "AUTO_HEDGE_CANCELLED":
+      return `Exposure exited RED · now ${String(event.payload.exit_risk_band)}`;
+    case "AUTO_HEDGE_REQUIRED":
+      return `Remaining requirement ${formatBtc(payloadNumber(event, "remaining_hedge_requirement_btc"))} · no order created`;
     default:
       return event.aggregate_id;
   }
@@ -1034,6 +1123,26 @@ function formatBookQuantity(value: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 4,
   }).format(value);
+}
+
+function optionalUsd(value: string | null | undefined): string {
+  return value === null || value === undefined ? "—" : formatUsd(Number(value));
+}
+
+function formatOptionalRate(value: string | null | undefined): string {
+  return value === null || value === undefined
+    ? "—"
+    : `${(Number(value) * 100).toFixed(4)}%`;
+}
+
+function formatOptionalBtc(value: string | null | undefined): string {
+  return value === null || value === undefined
+    ? "—"
+    : `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(Number(value))} BTC`;
+}
+
+function formatOptionalBps(value: string | null | undefined): string {
+  return value === null || value === undefined ? "—" : `${Number(value).toFixed(2)} bps`;
 }
 
 function formatBtc(value: number): string {

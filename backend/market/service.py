@@ -8,7 +8,9 @@ from ..domain.models import InstrumentType
 from .base import MarketDataAdapter
 from .coinbase import CoinbaseMarketDataAdapter
 from .kraken import KrakenSpotMarketDataAdapter
+from .kraken_futures import KrakenFuturesMarketDataAdapter
 from .models import MarketVenue
+from .okx import OKXMarketDataAdapter
 from .store import InMemoryMarketStateStore
 
 
@@ -67,6 +69,8 @@ market_data_service = MarketDataService(
     market_state_store,
     adapters=(
         KrakenSpotMarketDataAdapter(market_state_store),
+        KrakenFuturesMarketDataAdapter(market_state_store),
         CoinbaseMarketDataAdapter(market_state_store),
+        OKXMarketDataAdapter(market_state_store),
     ),
 )

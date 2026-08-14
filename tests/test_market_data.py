@@ -164,8 +164,10 @@ def test_coinbase_public_l2_normalizes_spot_and_perp_without_identity_collision(
     store, spot, perp = run(exercise())
 
     assert len(store._books) == 2
-    assert spot.eligible is True
-    assert perp.eligible is True
+    assert spot.eligible is False
+    assert perp.eligible is False
+    assert spot.exclusion_reason == "INSTRUMENT_METADATA_UNAVAILABLE"
+    assert perp.exclusion_reason == "INSTRUMENT_METADATA_UNAVAILABLE"
     assert spot.book is not None and perp.book is not None
     assert spot.book.venue_symbol == "BTC-USD"
     assert spot.book.best_bid == Decimal("62920.84")

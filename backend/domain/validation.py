@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from ..config import client_flow_config
 
-MINIMUM_CLIENT_RFQ_NOTIONAL_USD = Decimal("500000")
+
+MINIMUM_CLIENT_RFQ_NOTIONAL_USD = client_flow_config.minimum_rfq_notional_usd
 
 
 class RFQBelowMinimumNotional(ValueError):

@@ -23,13 +23,14 @@ test("server-renders the FlowHedge terminal shell", async () => {
   assert.match(html, /FLOWHEDGE/);
   assert.match(html, /Hedge Decision Workspace · Simulated Execution/);
   assert.match(html, /Live Market Data · Multi-Venue/);
-  assert.match(html, /Kraken and Coinbase public adapters/);
+  assert.match(html, /Kraken, Coinbase, and OKX public adapters/);
   assert.match(html, /KRAKEN SPOT/);
   assert.match(html, /Demo Client Quote · Active RFQ/);
   assert.match(html, /RFQ Inbox/);
   assert.match(html, /Orders arrive asynchronously/);
-  assert.match(html, /RISK POLICY NOT CONFIGURED/);
-  assert.match(html, /MANUAL MODE · STEP 6/);
+  assert.match(html, /RISK REFERENCE LOADING/);
+  assert.match(html, /DEMO DESK ASSUMPTIONS/);
+  assert.match(html, /MANUAL MODE · STEP 7/);
   assert.match(html, /No exposure to hedge/);
   assert.match(html, /PnL accounting unavailable/);
   assert.match(html, /No hedge orders/);
@@ -38,7 +39,7 @@ test("server-renders the FlowHedge terminal shell", async () => {
   assert.match(html, /introduce valid institutional RFQs asynchronously/);
   assert.doesNotMatch(html, /INJECT RFQ/);
   assert.doesNotMatch(html, /value="0\.10"/);
-  assert.doesNotMatch(html, /\+\$9,390|YELLOW · PARTIAL HEDGE/);
+  assert.doesNotMatch(html, /\+\$9,390/);
   assert.doesNotMatch(html, /FUTURE STEP/);
   assert.doesNotMatch(html, /Next client RFQ|countdown|codex-preview/i);
 });

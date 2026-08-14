@@ -58,10 +58,37 @@ export interface InstrumentRules {
   status: string;
   contract_structure: "SPOT" | "LINEAR" | "INVERSE";
   contract_multiplier: string;
+  contract_value_currency: string | null;
+  native_quantity_unit: string;
   settlement_asset: string;
   usd_conversion_rate: string;
   usd_conversion_assumption: string | null;
   received_at: string;
+}
+
+export interface DerivativeMarketContext {
+  venue: string;
+  symbol: string;
+  venue_symbol: string;
+  mark_price: string | null;
+  index_price: string | null;
+  current_funding_rate: string | null;
+  predicted_funding_rate: string | null;
+  next_funding_time: string | null;
+  funding_interval_seconds: number | null;
+  open_interest: string | null;
+  open_interest_unit: string | null;
+  open_interest_btc_equivalent: string | null;
+  open_interest_usd: string | null;
+  mark_price_captured_at: string | null;
+  index_price_captured_at: string | null;
+  funding_captured_at: string | null;
+  open_interest_captured_at: string | null;
+  received_at: string;
+  source: string;
+  basis_bps: string | null;
+  basis_reference_price_usd: string | null;
+  basis_captured_at: string | null;
 }
 
 export interface NormalizedOrderBook {
@@ -102,7 +129,12 @@ export interface MarketStateView {
   connection: MarketConnectionState;
   book: NormalizedOrderBook | null;
   instrument: InstrumentRules | null;
+  derivatives: DerivativeMarketContext | null;
+  executable_bid_levels: number;
+  executable_ask_levels: number;
   book_data_age_ms: number | null;
+  derivative_data_age_ms: number | null;
+  derivative_data_stale: boolean | null;
   eligible: boolean;
   exclusion_reason: string | null;
   as_of: string;
@@ -241,9 +273,44 @@ export interface ClientFlowState {
 export interface DemoWorkspaceState {
   client_flow: ClientFlowState;
   desk_state: DeskState;
+  risk_assessment: RiskAssessment;
   hedge_orders: HedgeOrder[];
   hedge_fills: HedgeFill[];
   events: FlowEvent[];
+}
+
+export type RiskBand = "GREEN" | "YELLOW" | "RED" | "UNAVAILABLE";
+export type RiskAction = "WAREHOUSE" | "PARTIAL_HEDGE" | "IMMEDIATE_HEDGE" | "HOLD";
+
+export interface RiskAssessment {
+  assessment_id: string;
+  assessed_at: string;
+  policy_version: string;
+  assumption_label: "DEMO DESK ASSUMPTIONS";
+  desk_state_version: number;
+  market_snapshot_version: number;
+  reference_price_usd: string | null;
+  reference_price_degraded: boolean;
+  reference_price_source: string;
+  actual_delta_btc: string;
+  signed_delta_notional_usd: string | null;
+  absolute_delta_exposure_usd: string | null;
+  risk_band: RiskBand;
+  action: RiskAction;
+  target_delta_btc: string | null;
+  gross_required_hedge_delta_btc: string | null;
+  working_order_delta_btc: string;
+  projected_delta_btc: string;
+  remaining_hedge_requirement_btc: string | null;
+  working_order_conflict: boolean;
+  working_order_overhedge: boolean;
+  hard_breach_id: string | null;
+  hard_breach_started_at: string | null;
+  hard_breach_seconds_remaining: string | null;
+  auto_hedge_required: boolean;
+  auto_hedge_blocked: boolean;
+  auto_hedge_blocked_reasons: string[];
+  inventory_or_settlement_state: "NOT_EVALUATED";
 }
 
 export interface HedgeOrderBatchResult {

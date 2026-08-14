@@ -14,7 +14,7 @@ from websockets.exceptions import ConnectionClosed
 
 from ..domain.models import InstrumentType
 from .base import MarketDataAdapter
-from .book import KrakenOrderBookBuilder, decimal_value
+from .book import KrakenOrderBookBuilder, decimal_value, normalized_books_from_book
 from .models import (
     InstrumentRules,
     MarketConnectionStatus,
@@ -29,6 +29,7 @@ KRAKEN_SPOT_WS_ENDPOINT = "wss://ws.kraken.com/v2"
 KRAKEN_VENUE_SYMBOL = "BTC/USD"
 CANONICAL_SYMBOL = "BTC-USD"
 BOOK_DEPTH = 25
+SUBSCRIBED_BOOK_DEPTH = 500
 MESSAGE_TIMEOUT_SECONDS = 3
 RECONNECT_BACKOFF_SECONDS = (1, 2, 5, 10)
 
@@ -45,7 +46,8 @@ class KrakenSpotMarketDataAdapter(MarketDataAdapter):
 
     def __init__(self, store: InMemoryMarketStateStore) -> None:
         self.store = store
-        self._book_builder = KrakenOrderBookBuilder(depth=BOOK_DEPTH)
+        self._book_builder = KrakenOrderBookBuilder(depth=SUBSCRIBED_BOOK_DEPTH)
+        self._instrument_rules: InstrumentRules | None = None
 
     async def run(self) -> None:
         try:
@@ -80,7 +82,10 @@ class KrakenSpotMarketDataAdapter(MarketDataAdapter):
                     max_queue=128,
                 ) as websocket:
                     connected_at = utc_now()
-                    self._book_builder = KrakenOrderBookBuilder(depth=BOOK_DEPTH)
+                    self._book_builder = KrakenOrderBookBuilder(
+                        depth=SUBSCRIBED_BOOK_DEPTH
+                    )
+                    self._instrument_rules = None
                     await self.store.clear_book(
                         self.venue, CANONICAL_SYMBOL, InstrumentType.SPOT
                     )
@@ -126,7 +131,7 @@ class KrakenSpotMarketDataAdapter(MarketDataAdapter):
                     "params": {
                         "channel": "book",
                         "symbol": [KRAKEN_VENUE_SYMBOL],
-                        "depth": BOOK_DEPTH,
+                        "depth": SUBSCRIBED_BOOK_DEPTH,
                         "snapshot": True,
                     },
                     "req_id": 1,
@@ -193,7 +198,12 @@ class KrakenSpotMarketDataAdapter(MarketDataAdapter):
             book = self._book_builder.apply_update(payload, received_at=received_at)
         else:
             return
-        await self.store.replace_book(book)
+        if self._instrument_rules is None:
+            return
+        display_book, executable_book = normalized_books_from_book(
+            book, self._instrument_rules
+        )
+        await self.store.replace_books(display_book, executable_book)
         await self.store.update_connection(
             self.feed_id,
             status=MarketConnectionStatus.LIVE,
@@ -224,5 +234,6 @@ class KrakenSpotMarketDataAdapter(MarketDataAdapter):
                 status=str(pair["status"]),
                 received_at=received_at,
             )
+            self._instrument_rules = rules
             await self.store.replace_instrument(rules)
             return

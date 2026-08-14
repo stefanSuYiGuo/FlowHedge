@@ -8,7 +8,18 @@ from decimal import Decimal
 from typing import Any, Iterable
 
 from ..domain.models import InstrumentType
-from .models import MarketLevel, MarketVenue, NormalizedOrderBook
+from .models import (
+    ExecutableMarketLevel,
+    ExecutableOrderBook,
+    InstrumentRules,
+    MarketLevel,
+    MarketVenue,
+    NormalizedOrderBook,
+)
+
+
+DISPLAY_BOOK_LEVELS = 25
+EXECUTABLE_BOOK_MAX_LEVELS = 200
 
 
 class KrakenChecksumMismatch(ValueError):
@@ -173,3 +184,113 @@ class KrakenOrderBookBuilder:
             raise KrakenChecksumMismatch(
                 f"Kraken checksum mismatch: expected {expected}, calculated {actual}"
             )
+
+
+def normalized_books_from_levels(
+    *,
+    rules: InstrumentRules,
+    bids: Iterable[tuple[Decimal, Decimal]],
+    asks: Iterable[tuple[Decimal, Decimal]],
+    exchange_timestamp: datetime,
+    received_at: datetime,
+    checksum: int | None = None,
+    source_sequence: int | None = None,
+    display_levels: int = DISPLAY_BOOK_LEVELS,
+    executable_levels: int = EXECUTABLE_BOOK_MAX_LEVELS,
+) -> tuple[NormalizedOrderBook, ExecutableOrderBook]:
+    """Create compact and executable books from real venue levels only."""
+
+    sorted_bids = sorted(
+        ((decimal_value(price), decimal_value(quantity)) for price, quantity in bids),
+        key=lambda level: level[0],
+        reverse=True,
+    )[:executable_levels]
+    sorted_asks = sorted(
+        ((decimal_value(price), decimal_value(quantity)) for price, quantity in asks),
+        key=lambda level: level[0],
+    )[:executable_levels]
+    sorted_bids = [level for level in sorted_bids if level[1] > 0]
+    sorted_asks = [level for level in sorted_asks if level[1] > 0]
+    if not sorted_bids or not sorted_asks:
+        raise ValueError("normalized books require at least one real bid and ask")
+
+    def executable_level(level: tuple[Decimal, Decimal]) -> ExecutableMarketLevel:
+        price, source_quantity = level
+        return ExecutableMarketLevel(
+            price=price,
+            quantity_btc_equivalent=rules.quantity_to_btc_equivalent(
+                source_quantity, price=price
+            ),
+            source_quantity=source_quantity,
+            source_quantity_unit=rules.native_quantity_unit,
+        )
+
+    executable_bids = tuple(executable_level(level) for level in sorted_bids)
+    executable_asks = tuple(executable_level(level) for level in sorted_asks)
+    display_bids = executable_bids[:display_levels]
+    display_asks = executable_asks[:display_levels]
+    best_bid = display_bids[0].price
+    best_ask = display_asks[0].price
+    mid_price = (best_bid + best_ask) / Decimal("2")
+    spread = best_ask - best_bid
+
+    display = NormalizedOrderBook(
+        venue=rules.venue,
+        symbol=rules.symbol,
+        venue_symbol=rules.venue_symbol,
+        instrument_type=rules.instrument_type,
+        depth=display_levels,
+        bids=tuple(
+            MarketLevel(
+                price=level.price,
+                quantity=level.quantity_btc_equivalent,
+            )
+            for level in display_bids
+        ),
+        asks=tuple(
+            MarketLevel(
+                price=level.price,
+                quantity=level.quantity_btc_equivalent,
+            )
+            for level in display_asks
+        ),
+        best_bid=best_bid,
+        best_ask=best_ask,
+        mid_price=mid_price,
+        spread=spread,
+        spread_bps=(spread / mid_price) * Decimal("10000"),
+        exchange_timestamp=exchange_timestamp,
+        received_at=received_at,
+        checksum=checksum,
+        source_sequence=source_sequence,
+    )
+    executable = ExecutableOrderBook(
+        venue=rules.venue,
+        symbol=rules.symbol,
+        venue_symbol=rules.venue_symbol,
+        instrument_type=rules.instrument_type,
+        max_levels=executable_levels,
+        bids=executable_bids,
+        asks=executable_asks,
+        exchange_timestamp=exchange_timestamp,
+        received_at=received_at,
+        source_sequence=source_sequence,
+    )
+    return display, executable
+
+
+def normalized_books_from_book(
+    book: NormalizedOrderBook,
+    rules: InstrumentRules,
+) -> tuple[NormalizedOrderBook, ExecutableOrderBook]:
+    """Normalize a venue builder's bounded native-quantity book."""
+
+    return normalized_books_from_levels(
+        rules=rules,
+        bids=((level.price, level.quantity) for level in book.bids),
+        asks=((level.price, level.quantity) for level in book.asks),
+        exchange_timestamp=book.exchange_timestamp,
+        received_at=book.received_at,
+        checksum=book.checksum,
+        source_sequence=book.source_sequence,
+    )

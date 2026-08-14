@@ -15,6 +15,7 @@ from ..domain.models import InstrumentType
 class MarketVenue(str, Enum):
     KRAKEN = "KRAKEN"
     COINBASE = "COINBASE"
+    OKX = "OKX"
 
 
 class ContractStructure(str, Enum):
@@ -55,10 +56,27 @@ class InstrumentRules(BaseModel):
     status: str
     contract_structure: ContractStructure = ContractStructure.SPOT
     contract_multiplier: Decimal = Field(default=Decimal("1"), gt=0)
+    contract_value_currency: Optional[str] = None
+    native_quantity_unit: str = "BASE_ASSET"
     settlement_asset: str = "USD"
     usd_conversion_rate: Decimal = Field(default=Decimal("1"), gt=0)
     usd_conversion_assumption: Optional[str] = None
     received_at: datetime
+
+    def quantity_to_btc_equivalent(
+        self, native_quantity: Decimal, *, price: Decimal
+    ) -> Decimal:
+        """Normalize venue-native quantities using dynamically retrieved metadata."""
+
+        if native_quantity < 0:
+            raise ValueError("native quantity cannot be negative")
+        if price <= 0:
+            raise ValueError("price must be positive")
+        if self.instrument_type is InstrumentType.SPOT:
+            return native_quantity
+        if self.contract_structure is ContractStructure.INVERSE:
+            return native_quantity * self.contract_multiplier / price
+        return native_quantity * self.contract_multiplier
 
 
 class NormalizedOrderBook(BaseModel):
@@ -110,6 +128,61 @@ class NormalizedOrderBook(BaseModel):
         return self
 
 
+class ExecutableMarketLevel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    price: Decimal = Field(gt=0)
+    quantity_btc_equivalent: Decimal = Field(gt=0)
+    source_quantity: Decimal = Field(gt=0)
+    source_quantity_unit: str
+
+
+class ExecutableOrderBook(BaseModel):
+    """Bounded legitimate L2 depth prepared for the future Cost Engine."""
+
+    model_config = ConfigDict(frozen=True)
+
+    venue: MarketVenue
+    symbol: str
+    venue_symbol: str
+    instrument_type: InstrumentType
+    max_levels: int = Field(gt=0, le=200)
+    bids: tuple[ExecutableMarketLevel, ...]
+    asks: tuple[ExecutableMarketLevel, ...]
+    exchange_timestamp: datetime
+    received_at: datetime
+    source_sequence: Optional[int] = Field(default=None, ge=0)
+
+
+class DerivativeMarketContext(BaseModel):
+    """Timestamped public derivatives context; missing venue fields remain null."""
+
+    model_config = ConfigDict(frozen=True)
+
+    venue: MarketVenue
+    symbol: str
+    venue_symbol: str
+    mark_price: Optional[Decimal] = Field(default=None, gt=0)
+    index_price: Optional[Decimal] = Field(default=None, gt=0)
+    current_funding_rate: Optional[Decimal] = None
+    predicted_funding_rate: Optional[Decimal] = None
+    next_funding_time: Optional[datetime] = None
+    funding_interval_seconds: Optional[int] = Field(default=None, gt=0)
+    open_interest: Optional[Decimal] = Field(default=None, ge=0)
+    open_interest_unit: Optional[str] = None
+    open_interest_btc_equivalent: Optional[Decimal] = Field(default=None, ge=0)
+    open_interest_usd: Optional[Decimal] = Field(default=None, ge=0)
+    mark_price_captured_at: Optional[datetime] = None
+    index_price_captured_at: Optional[datetime] = None
+    funding_captured_at: Optional[datetime] = None
+    open_interest_captured_at: Optional[datetime] = None
+    received_at: datetime
+    source: str
+    basis_bps: Optional[Decimal] = None
+    basis_reference_price_usd: Optional[Decimal] = Field(default=None, gt=0)
+    basis_captured_at: Optional[datetime] = None
+
+
 class MarketConnectionState(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -133,7 +206,12 @@ class MarketStateView(BaseModel):
     connection: MarketConnectionState
     book: Optional[NormalizedOrderBook]
     instrument: Optional[InstrumentRules]
+    derivatives: Optional[DerivativeMarketContext] = None
+    executable_bid_levels: int = Field(default=0, ge=0)
+    executable_ask_levels: int = Field(default=0, ge=0)
     book_data_age_ms: Optional[int] = Field(default=None, ge=0)
+    derivative_data_age_ms: Optional[int] = Field(default=None, ge=0)
+    derivative_data_stale: Optional[bool] = None
     eligible: bool
     exclusion_reason: Optional[str] = None
     as_of: datetime
@@ -148,3 +226,17 @@ class UnifiedMarketSnapshot(BaseModel):
     captured_at: datetime
     base_asset: str
     markets: tuple[MarketStateView, ...]
+
+
+class ExecutableBookView(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    venue: MarketVenue
+    symbol: str
+    instrument_type: InstrumentType
+    connection: MarketConnectionState
+    book: Optional[ExecutableOrderBook]
+    book_data_age_ms: Optional[int] = Field(default=None, ge=0)
+    eligible: bool
+    exclusion_reason: Optional[str] = None
+    as_of: datetime

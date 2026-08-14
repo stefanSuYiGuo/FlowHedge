@@ -16,10 +16,12 @@ from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
 from ..domain.models import InstrumentType
+from ..config import stablecoin_quote_config
 from .base import MarketDataAdapter
-from .book import decimal_value
+from .book import decimal_value, normalized_books_from_levels
 from .models import (
     ContractStructure,
+    DerivativeMarketContext,
     InstrumentRules,
     MarketConnectionStatus,
     MarketLevel,
@@ -45,6 +47,7 @@ MESSAGE_TIMEOUT_SECONDS = 5
 RECONNECT_BACKOFF_SECONDS = (1, 2, 5, 10)
 PUBLIC_MESSAGE_MAX_BYTES = 8 * 1024 * 1024
 STABLECOIN_USD_ASSUMPTION = "USDC_USD_1_TO_1_DEMO"
+DERIVATIVE_CONTEXT_REFRESH_SECONDS = 5
 
 
 @dataclass(frozen=True)
@@ -144,12 +147,74 @@ def instrument_rules_from_product(
             ContractStructure.LINEAR if is_perpetual else ContractStructure.SPOT
         ),
         contract_multiplier=contract_multiplier,
+        contract_value_currency=base_asset if is_perpetual else None,
+        native_quantity_unit="CONTRACTS" if is_perpetual else base_asset,
         settlement_asset=quote_asset,
-        usd_conversion_rate=Decimal("1"),
+        usd_conversion_rate=(
+            stablecoin_quote_config.usdc_usd_rate
+            if quote_asset == "USDC"
+            else Decimal("1")
+        ),
         usd_conversion_assumption=(
             STABLECOIN_USD_ASSUMPTION if quote_asset == "USDC" else None
         ),
         received_at=received_at,
+    )
+
+
+def derivative_context_from_product(
+    product: dict[str, Any],
+    spec: CoinbaseProductSpec,
+    rules: InstrumentRules,
+    *,
+    received_at: datetime,
+) -> DerivativeMarketContext:
+    details = product.get("future_product_details") or {}
+    perpetual = details.get("perpetual_details") or {}
+    index_price_raw = details.get("index_price")
+    funding_rate_raw = details.get("funding_rate") or perpetual.get("funding_rate")
+    open_interest_raw = details.get("open_interest") or perpetual.get("open_interest")
+    funding_time_raw = details.get("funding_time") or perpetual.get("funding_time")
+    interval_raw = details.get("funding_interval")
+    index_price = decimal_value(index_price_raw) if index_price_raw else None
+    open_interest = decimal_value(open_interest_raw) if open_interest_raw else None
+    open_interest_btc = (
+        open_interest * rules.contract_multiplier if open_interest is not None else None
+    )
+    reference = index_price or (
+        decimal_value(product["price"]) if product.get("price") else None
+    )
+    funding_time = (
+        parse_coinbase_timestamp(str(funding_time_raw)) if funding_time_raw else None
+    )
+    interval_seconds = None
+    if isinstance(interval_raw, str) and interval_raw.endswith("s"):
+        interval_seconds = int(interval_raw[:-1])
+    return DerivativeMarketContext(
+        venue=MarketVenue.COINBASE,
+        symbol=spec.canonical_symbol,
+        venue_symbol=spec.venue_symbol,
+        mark_price=None,
+        index_price=index_price,
+        current_funding_rate=(
+            decimal_value(funding_rate_raw) if funding_rate_raw else None
+        ),
+        predicted_funding_rate=None,
+        next_funding_time=funding_time,
+        funding_interval_seconds=interval_seconds,
+        open_interest=open_interest,
+        open_interest_unit="CONTRACTS" if open_interest is not None else None,
+        open_interest_btc_equivalent=open_interest_btc,
+        open_interest_usd=(
+            open_interest_btc * reference
+            if open_interest_btc is not None and reference is not None
+            else None
+        ),
+        index_price_captured_at=received_at if index_price is not None else None,
+        funding_captured_at=received_at if funding_rate_raw else None,
+        open_interest_captured_at=received_at if open_interest is not None else None,
+        received_at=received_at,
+        source="COINBASE_PUBLIC_PRODUCT",
     )
 
 
@@ -245,6 +310,22 @@ class CoinbaseOrderBookBuilder:
             source_sequence=self._sequence,
         )
 
+    def current_normalized_books(self, rules: InstrumentRules):
+        if (
+            self._exchange_timestamp is None
+            or self._received_at is None
+            or self._sequence is None
+        ):
+            raise ValueError("Coinbase order book has not received a valid snapshot")
+        return normalized_books_from_levels(
+            rules=rules,
+            bids=self._bids.items(),
+            asks=self._asks.items(),
+            exchange_timestamp=self._exchange_timestamp,
+            received_at=self._received_at,
+            source_sequence=self._sequence,
+        )
+
     def _truncate(
         self, side: dict[Decimal, Decimal], *, reverse: bool
     ) -> dict[Decimal, Decimal]:
@@ -278,6 +359,7 @@ class CoinbaseMarketDataAdapter(MarketDataAdapter):
         self.store = store
         self.product_fetcher = product_fetcher
         self._builders = self._new_builders()
+        self._rules: dict[str, InstrumentRules] = {}
 
     def _new_builders(self) -> dict[str, CoinbaseOrderBookBuilder]:
         return {
@@ -320,6 +402,7 @@ class CoinbaseMarketDataAdapter(MarketDataAdapter):
                 ) as websocket:
                     connected_at = utc_now()
                     self._builders = self._new_builders()
+                    self._rules = {}
                     for _, spec in PRODUCT_SPECS.items():
                         await self.store.clear_book(
                             self.venue,
@@ -337,7 +420,15 @@ class CoinbaseMarketDataAdapter(MarketDataAdapter):
                     await self._subscribe(websocket)
                     reconnect_attempt = 0
                     logger.info("Coinbase public Spot/Perp market data connected")
-                    await self._consume(websocket)
+                    context_task = asyncio.create_task(
+                        self._context_refresh_loop(),
+                        name="coinbase-public-derivatives-context",
+                    )
+                    try:
+                        await self._consume(websocket)
+                    finally:
+                        context_task.cancel()
+                        await asyncio.gather(context_task, return_exceptions=True)
             except CoinbaseMessageTimeout as error:
                 reconnect_attempt += 1
                 await self.store.update_connection(
@@ -368,13 +459,28 @@ class CoinbaseMarketDataAdapter(MarketDataAdapter):
                 rules = instrument_rules_from_product(
                     product, spec, received_at=utc_now()
                 )
+                self._rules[product_id] = rules
                 await self.store.replace_instrument(rules)
+                if spec.instrument_type is InstrumentType.PERPETUAL:
+                    await self.store.replace_derivative_context(
+                        derivative_context_from_product(
+                            product,
+                            spec,
+                            rules,
+                            received_at=rules.received_at,
+                        )
+                    )
             except Exception as error:
                 logger.warning(
                     "Coinbase public metadata unavailable for %s: %s",
                     product_id,
                     error,
                 )
+
+    async def _context_refresh_loop(self) -> None:
+        while True:
+            await asyncio.sleep(DERIVATIVE_CONTEXT_REFRESH_SECONDS)
+            await self._refresh_product_metadata()
 
     async def _subscribe(self, websocket: ClientConnection) -> None:
         product_ids = list(PRODUCT_SPECS)
@@ -427,7 +533,12 @@ class CoinbaseMarketDataAdapter(MarketDataAdapter):
                 book = builder.apply_event(
                     event, sequence=sequence, received_at=received_at
                 )
-                await self.store.replace_book(book)
+                rules = self._rules.get(product_id)
+                if rules is None:
+                    await self.store.replace_book(book)
+                else:
+                    display, executable = builder.current_normalized_books(rules)
+                    await self.store.replace_books(display, executable)
                 published = True
             if published:
                 await self.store.update_connection(

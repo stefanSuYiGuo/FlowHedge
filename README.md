@@ -4,18 +4,18 @@ FlowHedge is an institutional crypto sales-trading simulator. The current
 checkpoint contains the reviewable trading-terminal layout, a backend-driven
 institutional client-flow simulator, and an accounting chain from RFQ through
 client fill, manual Spot/Perp hedge orders, simulated fills, and desk-state
-updates. It also consumes public Kraken and Coinbase BTC market data through a
-venue-neutral, multi-instrument market-data layer.
-Production pricing, hedge optimization, risk policy, and PnL logic remain
-deferred.
+updates. RiskPolicy v1 is active, and the public market universe now contains
+six Spot/Perpetual candidates across Kraken, Coinbase, and OKX. Production
+pricing, hedge optimization, smart routing, real execution, and PnL logic
+remain deferred.
 
 ## Current layout
 
 - **Header:** instrument, live Kraken Spot mid-price, independent API/market connectivity, and manual/auto hedge mode.
 - **Desk strip:** actual, working, and projected delta plus Spot and derivative positions.
-- **Left rail:** selectable Kraken/Coinbase Spot and Perp depth-25 books, multi-order RFQ inbox, and backend flow pause/resume controls.
+- **Left rail:** selectable Kraken/Coinbase/OKX Spot and Perp compact books, derivatives context, multi-order RFQ inbox, and backend flow pause/resume controls.
 - **Center stage:** pending/accepted demo client quotes, live-but-not-optimized Kraken hedge reference, manual hedge allocation and simulated fill controls, and event tape.
-- **Right rail:** reconciled desk positions, deferred PnL, and the hedge order/fill blotter.
+- **Right rail:** reconciled desk positions, live RiskPolicy assessment, deferred PnL, and the hedge order/fill blotter.
 
 No countdown or prediction of the next client RFQ is shown. Orders are modeled
 as asynchronous arrivals.
@@ -58,8 +58,8 @@ start this command again, and confirm that `/health` returns before refreshing
 the page. Frontend requests time out after five seconds and recover
 automatically when the backend becomes available.
 
-The Kraken adapter uses public market data only. No account, API key, or real
-order permission is required.
+The Kraken, Coinbase, and OKX adapters use public market data only. No account,
+API key, or real-order permission is required.
 
 ## Step 2 accounting demo
 
@@ -92,8 +92,8 @@ and total delta. A repeated run is identified as a replay and cannot book the
 same client trade twice. The normal page no longer exposes a manual Inject RFQ
 button. **Reset Demo** clears all current client and hedge state.
 
-Risk Policy, automatic hedge recommendations, and PnL remain visibly marked as
-unavailable until their later accounting steps are implemented.
+The later Step 7 adds RiskPolicy without changing this fill-based accounting
+chain. Automatic hedge recommendations and PnL remain unavailable.
 
 The frontend defaults to `http://127.0.0.1:8000`. To use a different local API,
 set `NEXT_PUBLIC_FLOWHEDGE_API_URL` before starting the frontend.
@@ -183,9 +183,9 @@ arrival time is intentionally not exposed to the UI.
 
 ## Step 6 unified multi-venue market state
 
-The normalized market layer now supports multiple venues and multiple
+At the Step 6 checkpoint, the normalized market layer supported multiple venues and multiple
 instrument types without allowing Spot and Perpetual books with the same
-canonical symbol to collide. The live universe for this checkpoint is:
+canonical symbol to collide. The live universe for that checkpoint was:
 
 - Kraken `BTC/USD` Spot.
 - Coinbase `BTC-USD` Spot.
@@ -217,8 +217,74 @@ Cost Engine. Funding cost is intentionally deferred and is not included in any
 calculation.
 
 This step does not yet compare execution costs, recommend hedges, route orders,
-or change RFQ pricing. Those remain responsibilities of later Risk Policy,
-Cost Engine, Hedge Optimizer, SOR, and Pricing Engine steps.
+or change RFQ pricing. Those remain responsibilities of the later Cost Engine,
+Hedge Optimizer, SOR, and Pricing Engine steps.
+
+## Step 7 RiskPolicy v1
+
+RiskPolicy answers only whether directional delta should be hedged and how much
+exposure should be removed. It does not choose Spot versus Perpetual, select a
+venue, optimize a route, or create hedge orders.
+
+The configurable values below are visibly labelled **DEMO DESK ASSUMPTIONS**.
+They are not OSL internal risk limits:
+
+- Soft delta limit: USD 1,000,000.
+- Hard delta limit: USD 3,000,000.
+- RED target: flat.
+- Hard-breach grace period: five seconds.
+
+GREEN warehouses actual exposure at or below the soft limit. YELLOW targets the
+signed soft-limit boundary. RED targets flat. Classification uses actual,
+fill-based delta; working orders only reduce the remaining hedge requirement and
+contribute to projected delta. Conflict and overhedge guards protect future auto
+execution from unsafe working-order state.
+
+The independent BTC risk reference is the median of fresh Kraken and Coinbase
+USD Spot mids. One healthy source is accepted in degraded mode. If neither is
+available, RiskPolicy returns `UNAVAILABLE / HOLD` rather than silently returning
+GREEN or inventing a price.
+
+A RED breach owns a stable breach ID and five-second timer. Market ticks, desk
+version changes, API polling, and browser refreshes do not reset it. Exiting RED
+cancels the countdown; remaining RED emits one idempotent
+`AUTO_HEDGE_REQUIRED` event. Step 7 deliberately does not create a fake optimal
+hedge or any automatic order.
+
+- `GET /risk/assessment` returns the current assessment and breach lifecycle.
+- `GET /demo/workspace` includes the same assessment beside desk, RFQ, hedge,
+  and event state.
+
+## Step 7.5 executable and derivatives market data
+
+The public candidate universe is now six markets:
+
+- Kraken BTC/USD Spot and `PI_XBTUSD` inverse Perpetual.
+- Coinbase BTC/USD Spot and `BTC-PERP-INTX` linear Perpetual.
+- OKX BTC/USDT Spot and `BTC-USDT-SWAP` linear Perpetual.
+
+The page renders only the top five levels. The backend separately retains up to
+200 real L2 levels per side where the venue supplies them; it never synthesizes
+or extrapolates missing liquidity. `GET
+/market/executable-books/{venue}/{instrument_type}/{symbol}` exposes that bounded
+book for the future Cost Engine.
+
+Derivative source quantities are converted into BTC equivalent inside the
+market layer from live instrument metadata. Linear contract quantities use the
+venue contract value; Kraken inverse quantities are converted at each price
+level. No venue contract multiplier is hard-coded in optimizer-facing data.
+
+Where public data exists, the normalized derivative context retains mark,
+index, current/predicted funding, funding timing, open interest in native/BTC/USD
+units, basis, and separate observation timestamps. Unavailable fields remain
+null. A bounded five-second observation series covers roughly one hour for
+future 5-minute/1-hour open-interest changes without becoming an unbounded tick
+database. Funding is data only: there is no expected funding-cost calculation
+until a future hedge horizon is defined.
+
+USDT≈USD and USDC≈USD are centralized, explicit 1:1 demo assumptions. Stale or
+disconnected books are ineligible, and each adapter fails independently so one
+venue cannot terminate the others.
 
 ## Validate
 
