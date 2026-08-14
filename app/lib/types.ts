@@ -207,6 +207,28 @@ export interface DemoScenarioResult {
   events: FlowEvent[];
 }
 
+export interface PendingClientFlow {
+  correlation_id: string;
+  market_snapshot: MarketSnapshot;
+  rfq: RFQ;
+}
+
+export interface ClientFlowState {
+  active: boolean;
+  mode: "MANUAL_SLOW_FLOW";
+  pending_rfqs: PendingClientFlow[];
+  completed_scenarios: DemoScenarioResult[];
+  completed_count: number;
+}
+
+export interface DemoWorkspaceState {
+  client_flow: ClientFlowState;
+  desk_state: DeskState;
+  hedge_orders: HedgeOrder[];
+  hedge_fills: HedgeFill[];
+  events: FlowEvent[];
+}
+
 export interface HedgeOrderBatchResult {
   replayed: boolean;
   batch_id: string;

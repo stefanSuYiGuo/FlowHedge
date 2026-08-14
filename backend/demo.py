@@ -1,4 +1,4 @@
-"""Deterministic Step 2 scenario for verifying the accounting chain."""
+"""In-memory client-trade and simulated-hedge accounting service."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from uuid import uuid4
 from .domain.accounting import (
     apply_client_trade,
     apply_hedge_fill,
+    signed_client_spot_change,
     signed_hedge_delta,
 )
 from .domain.models import (
@@ -29,6 +30,7 @@ from .domain.models import (
     InstrumentType,
     MarketObservation,
     MarketSnapshot,
+    PendingClientFlow,
     Quote,
     QuoteStatus,
     RFQ,
@@ -65,7 +67,7 @@ def utc_now() -> datetime:
 
 
 class DemoTradingService:
-    """Small in-memory service for one repeatable RFQ-to-desk-state scenario."""
+    """Maintain cumulative desk state for deterministic and generated RFQs."""
 
     def __init__(self) -> None:
         self.reset()
@@ -82,11 +84,15 @@ class DemoTradingService:
         self.events: list[Event] = []
         self.processed_trade_ids: set[str] = set()
         self.hedge_orders: dict[str, HedgeOrder] = {}
+        self.archived_hedge_orders: list[HedgeOrder] = []
         self.hedge_fills: list[HedgeFill] = []
         self.processed_fill_results: dict[str, HedgeFillResult] = {}
+        self.completed_scenarios: list[DemoScenarioResult] = []
         self.saved_result: DemoScenarioResult | None = None
+        self.fixed_result: DemoScenarioResult | None = None
         self.saved_order_batch: HedgeOrderBatchResult | None = None
         self.hedge_order_revision = 0
+        self.client_flow_sequence = 0
         return self.desk_state
 
     def _event(
@@ -114,8 +120,8 @@ class DemoTradingService:
     def run_fixed_client_trade(self) -> DemoScenarioResult:
         """Run the fixed valid RFQ once; subsequent calls are idempotent replays."""
 
-        if self.saved_result is not None:
-            return self.saved_result.model_copy(update={"replayed": True})
+        if self.fixed_result is not None:
+            return self.fixed_result.model_copy(update={"replayed": True})
 
         started_at = utc_now()
         correlation_id = f"flow-{uuid4().hex[:10]}"
@@ -258,7 +264,7 @@ class DemoTradingService:
             )
         )
 
-        self.saved_result = DemoScenarioResult(
+        self.fixed_result = DemoScenarioResult(
             replayed=False,
             market_snapshot=snapshot,
             rfq=rfq,
@@ -268,7 +274,175 @@ class DemoTradingService:
             desk_state_after=self.desk_state,
             events=tuple(scenario_events),
         )
-        return self.saved_result
+        self.saved_result = self.fixed_result
+        self.completed_scenarios.append(self.fixed_result)
+        return self.fixed_result
+
+    def begin_generated_client_rfq(
+        self,
+        *,
+        snapshot: MarketSnapshot,
+        client_side: ClientSide,
+        quantity_btc: Decimal,
+        client_id: str,
+    ) -> PendingClientFlow:
+        """Register a live-sized RFQ before the simulated quote delay begins."""
+
+        self.client_flow_sequence += 1
+        sequence = self.client_flow_sequence
+        correlation_id = f"client-flow-{sequence:04}"
+        notional_usd = validate_client_rfq_notional(
+            quantity_btc, snapshot.reference_price_usd
+        )
+        rfq = RFQ(
+            rfq_id=f"rfq-flow-{sequence:04}",
+            client_id=client_id,
+            instrument_id="BTC-USD",
+            client_side=client_side,
+            quantity_btc=quantity_btc,
+            received_at=utc_now(),
+            status=RFQStatus.PRICING,
+            validation_market_snapshot_id=snapshot.market_snapshot_id,
+            validation_reference_price_usd=snapshot.reference_price_usd,
+            validated_notional_usd=notional_usd,
+        )
+        version = self.desk_state.version
+        self._event(
+            EventType.RFQ_RECEIVED,
+            rfq.rfq_id,
+            correlation_id,
+            version,
+            version,
+            {"client_side": rfq.client_side, "quantity_btc": rfq.quantity_btc},
+        )
+        self._event(
+            EventType.RFQ_VALIDATED,
+            rfq.rfq_id,
+            correlation_id,
+            version,
+            version,
+            {"notional_usd": notional_usd, "rule": "notional_usd > 500000"},
+        )
+        return PendingClientFlow(
+            correlation_id=correlation_id,
+            market_snapshot=snapshot,
+            rfq=rfq,
+        )
+
+    def complete_generated_client_rfq(
+        self, pending: PendingClientFlow
+    ) -> DemoScenarioResult:
+        """Quote at the captured Kraken touch, auto-accept, and book one client fill."""
+
+        if any(
+            scenario.rfq.rfq_id == pending.rfq.rfq_id
+            for scenario in self.completed_scenarios
+        ):
+            raise DemoStateError(f"RFQ already completed: {pending.rfq.rfq_id}")
+
+        observation = pending.market_snapshot.observations[0]
+        quoted_price = (
+            observation.ask
+            if pending.rfq.client_side is ClientSide.BUY
+            else observation.bid
+        )
+        quote = Quote(
+            quote_id=f"quote-{pending.rfq.rfq_id}-r1",
+            rfq_id=pending.rfq.rfq_id,
+            revision=1,
+            quoted_price_usd=quoted_price,
+            quantity_btc=pending.rfq.quantity_btc,
+            created_at=utc_now(),
+            expires_at=utc_now() + timedelta(seconds=5),
+            status=QuoteStatus.ACTIVE,
+            market_snapshot_id=pending.market_snapshot.market_snapshot_id,
+            desk_state_version=self.desk_state.version,
+            pricing_source="DEMO_KRAKEN_TOUCH_AUTO_ACCEPT",
+        )
+        before = self.desk_state.model_copy(deep=True)
+        scenario_events = [
+            event
+            for event in self.events
+            if event.correlation_id == pending.correlation_id
+        ]
+        scenario_events.append(
+            self._event(
+                EventType.QUOTE_GENERATED,
+                quote.quote_id,
+                pending.correlation_id,
+                before.version,
+                before.version,
+                {
+                    "quoted_price_usd": quote.quoted_price_usd,
+                    "pricing_source": quote.pricing_source,
+                },
+            )
+        )
+        quote = quote.model_copy(update={"status": QuoteStatus.ACCEPTED})
+        scenario_events.append(
+            self._event(
+                EventType.QUOTE_ACCEPTED,
+                quote.quote_id,
+                pending.correlation_id,
+                before.version,
+                before.version,
+                {"acceptance_model": "AUTO_ACCEPT"},
+            )
+        )
+        trade = ClientTrade(
+            client_trade_id=f"client-trade-{pending.rfq.rfq_id}",
+            rfq_id=pending.rfq.rfq_id,
+            quote_id=quote.quote_id,
+            client_id=pending.rfq.client_id,
+            instrument_id=pending.rfq.instrument_id,
+            client_side=pending.rfq.client_side,
+            quantity_btc=pending.rfq.quantity_btc,
+            trade_price_usd=quote.quoted_price_usd,
+            traded_at=utc_now(),
+        )
+        if trade.client_trade_id in self.processed_trade_ids:
+            raise DemoStateError(f"client trade already booked: {trade.client_trade_id}")
+        self.desk_state = apply_client_trade(self.desk_state, trade)
+        self.processed_trade_ids.add(trade.client_trade_id)
+        rfq = pending.rfq.model_copy(update={"status": RFQStatus.FILLED})
+        desk_spot_change = signed_client_spot_change(
+            trade.client_side, trade.quantity_btc
+        )
+        scenario_events.append(
+            self._event(
+                EventType.CLIENT_FILL,
+                trade.client_trade_id,
+                pending.correlation_id,
+                before.version,
+                self.desk_state.version,
+                {
+                    "client_side": trade.client_side,
+                    "quantity_btc": trade.quantity_btc,
+                    "desk_spot_change_btc": desk_spot_change,
+                },
+            )
+        )
+        scenario_events.append(
+            self._position_event(
+                pending.correlation_id,
+                before.version,
+                self.desk_state.version,
+                reason="CLIENT_FILL_APPLIED",
+            )
+        )
+        result = DemoScenarioResult(
+            replayed=False,
+            market_snapshot=pending.market_snapshot,
+            rfq=rfq,
+            quote=quote,
+            client_trade=trade,
+            desk_state_before=before,
+            desk_state_after=self.desk_state,
+            events=tuple(scenario_events),
+        )
+        self.saved_result = result
+        self.completed_scenarios.append(result)
+        return result
 
     def create_manual_hedge_orders(
         self,
@@ -286,6 +460,15 @@ class DemoTradingService:
                 "spot hedge quantity supports at most two decimal places"
             )
 
+        existing_batch_is_complete = bool(self.hedge_orders) and all(
+            order.status is HedgeOrderStatus.FILLED
+            for order in self.hedge_orders.values()
+        )
+        if existing_batch_is_complete:
+            self.archived_hedge_orders.extend(self.hedge_orders.values())
+            self.hedge_orders = {}
+            self.saved_order_batch = None
+
         if self.saved_order_batch is not None:
             original_spot = sum(
                 order.quantity_btc
@@ -302,7 +485,7 @@ class DemoTradingService:
             )
 
         if self.saved_result is None:
-            raise DemoStateError("book the fixed client trade before creating hedge orders")
+            raise DemoStateError("book a client trade before creating hedge orders")
 
         before = self.desk_state.model_copy(deep=True)
         required_hedge_delta = STEP_4_DEMO_TARGET_DELTA_BTC - before.total_delta_btc
@@ -413,7 +596,7 @@ class DemoTradingService:
 
         if not self.hedge_orders:
             raise DemoStateError("there are no hedge orders to cancel")
-        if self.hedge_fills or any(
+        if any(
             order.filled_quantity_btc > 0 for order in self.hedge_orders.values()
         ):
             raise DemoStateError(

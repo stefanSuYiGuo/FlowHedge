@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from .client_flow import client_flow_service
 from .demo import (
     DemoStateError,
     HedgeAllocationError,
@@ -17,7 +18,9 @@ from .demo import (
     demo_service,
 )
 from .domain.models import (
+    ClientFlowState,
     DemoScenarioResult,
+    DemoWorkspaceState,
     DeskState,
     Event,
     HedgeCancellationResult,
@@ -37,12 +40,14 @@ from .market.models import MarketConnectionState, MarketStateView, MarketVenue
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Start and stop public market adapters with the API process."""
+    """Run public market data and slow client flow with the API process."""
 
     await market_data_service.start()
+    await client_flow_service.start()
     try:
         yield
     finally:
+        await client_flow_service.stop()
         await market_data_service.stop()
 
 app = FastAPI(
@@ -160,11 +165,62 @@ async def run_fixed_client_trade() -> DemoScenarioResult:
     return demo_service.run_fixed_client_trade()
 
 
+@app.get(
+    "/demo/workspace",
+    response_model=DemoWorkspaceState,
+    tags=["demo", "client-flow"],
+)
+async def get_demo_workspace() -> DemoWorkspaceState:
+    """Return one coherent view for the continuously updating trading screen."""
+
+    return DemoWorkspaceState(
+        client_flow=client_flow_service.state(),
+        desk_state=demo_service.desk_state,
+        hedge_orders=tuple(demo_service.archived_hedge_orders)
+        + tuple(demo_service.hedge_orders.values()),
+        hedge_fills=tuple(demo_service.hedge_fills),
+        events=tuple(demo_service.events[-100:]),
+    )
+
+
+@app.post(
+    "/demo/client-flow/pause",
+    response_model=ClientFlowState,
+    tags=["demo", "client-flow"],
+)
+async def pause_client_flow() -> ClientFlowState:
+    return client_flow_service.pause()
+
+
+@app.post(
+    "/demo/client-flow/resume",
+    response_model=ClientFlowState,
+    tags=["demo", "client-flow"],
+)
+async def resume_client_flow() -> ClientFlowState:
+    return client_flow_service.resume()
+
+
+@app.post(
+    "/demo/client-flow/generate",
+    response_model=DemoScenarioResult,
+    tags=["test-support"],
+)
+async def generate_client_flow_now() -> DemoScenarioResult:
+    """Test seam for generating one live-sized RFQ; the normal UI never calls it."""
+
+    result = await client_flow_service.generate_once()
+    if result is None:
+        raise HTTPException(status_code=409, detail="live Kraken book is unavailable")
+    return result
+
+
 @app.post("/demo/reset", response_model=DeskState, tags=["demo"])
 async def reset_demo() -> DeskState:
-    """Reset the deterministic demo ledger to a flat version-zero desk state."""
+    """Clear all client/hedge state and restart the slow arrival schedule."""
 
-    return demo_service.reset()
+    client_flow_service.reset()
+    return demo_service.desk_state
 
 
 @app.get(
@@ -238,7 +294,9 @@ async def simulate_hedge_fill(
 
 @app.get("/demo/hedge-orders", response_model=list[HedgeOrder], tags=["hedging"])
 async def get_hedge_orders() -> list[HedgeOrder]:
-    return list(demo_service.hedge_orders.values())
+    return list(demo_service.archived_hedge_orders) + list(
+        demo_service.hedge_orders.values()
+    )
 
 
 @app.get("/demo/hedge-fills", response_model=list[HedgeFill], tags=["hedging"])

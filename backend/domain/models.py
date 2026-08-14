@@ -242,6 +242,32 @@ class DemoScenarioResult(BaseModel):
     events: tuple[Event, ...]
 
 
+class PendingClientFlow(BaseModel):
+    """An RFQ currently moving through the demo pricing/acceptance animation."""
+
+    correlation_id: str
+    market_snapshot: MarketSnapshot
+    rfq: RFQ
+
+
+class ClientFlowState(BaseModel):
+    """Observable client-flow state; deliberately omits a next-arrival timestamp."""
+
+    active: bool
+    mode: str = "MANUAL_SLOW_FLOW"
+    pending_rfqs: tuple[PendingClientFlow, ...] = ()
+    completed_scenarios: tuple[DemoScenarioResult, ...] = ()
+    completed_count: int = Field(ge=0)
+
+
+class DemoWorkspaceState(BaseModel):
+    client_flow: ClientFlowState
+    desk_state: DeskState
+    hedge_orders: tuple[HedgeOrder, ...]
+    hedge_fills: tuple[HedgeFill, ...]
+    events: tuple[Event, ...]
+
+
 class HedgeOrderBatchResult(BaseModel):
     replayed: bool
     batch_id: str

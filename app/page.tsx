@@ -1,31 +1,29 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   cancelUnfilledHedgeOrders,
   createManualHedgeOrders,
-  getDemoScenario,
-  getDeskState,
-  getEvents,
-  getHedgeFills,
-  getHedgeOrders,
+  getDemoWorkspace,
   getMarketState,
+  pauseClientFlow,
   resetDemo,
-  runDemoClientTrade,
+  resumeClientFlow,
   simulateHedgeFill,
 } from "./lib/api";
 import type {
   DemoScenarioResult,
+  DemoWorkspaceState,
   DeskState,
   FlowEvent,
   HedgeFill,
   HedgeOrder,
   MarketStateView,
+  PendingClientFlow,
 } from "./lib/types";
 
 type TradingMode = "manual" | "auto";
-type DemoStage = "idle" | "pricing" | "accepted" | "filled";
 
 const flatDeskState: DeskState = {
   version: 0,
@@ -37,14 +35,12 @@ const flatDeskState: DeskState = {
   working_order_delta_btc: "0",
 };
 
-const delay = (milliseconds: number) =>
-  new Promise((resolve) => window.setTimeout(resolve, milliseconds));
-
 export default function Home() {
   const [mode, setMode] = useState<TradingMode>("manual");
   const [flowActive, setFlowActive] = useState(true);
-  const [stage, setStage] = useState<DemoStage>("idle");
-  const [scenario, setScenario] = useState<DemoScenarioResult | null>(null);
+  const [completedScenarios, setCompletedScenarios] = useState<DemoScenarioResult[]>([]);
+  const [pendingRfqs, setPendingRfqs] = useState<PendingClientFlow[]>([]);
+  const [completedFlowCount, setCompletedFlowCount] = useState(0);
   const [deskState, setDeskState] = useState<DeskState>(flatDeskState);
   const [events, setEvents] = useState<FlowEvent[]>([]);
   const [hedgeOrders, setHedgeOrders] = useState<HedgeOrder[]>([]);
@@ -59,37 +55,30 @@ export default function Home() {
   const [marketState, setMarketState] = useState<MarketStateView | null>(null);
   const [marketPollFailed, setMarketPollFailed] = useState(false);
 
+  const applyWorkspace = useCallback((workspace: DemoWorkspaceState) => {
+    setDeskState(workspace.desk_state);
+    setEvents(workspace.events);
+    setHedgeOrders(workspace.hedge_orders);
+    setHedgeFills(workspace.hedge_fills);
+    setCompletedScenarios(workspace.client_flow.completed_scenarios);
+    setPendingRfqs(workspace.client_flow.pending_rfqs);
+    setCompletedFlowCount(workspace.client_flow.completed_count);
+    setFlowActive(workspace.client_flow.active);
+    const currentSpotOrder = workspace.hedge_orders.find(
+      (order) => order.instrument_type === "SPOT" && order.status !== "FILLED",
+    );
+    if (currentSpotOrder) setSpotAllocation(currentSpotOrder.quantity_btc);
+  }, []);
+
   useEffect(() => {
     let active = true;
+    let pollTimer: number | undefined;
 
-    async function loadBackendState() {
+    async function pollWorkspace() {
       try {
-        const [
-          currentDeskState,
-          currentScenario,
-          currentEvents,
-          currentHedgeOrders,
-          currentHedgeFills,
-        ] = await Promise.all([
-          getDeskState(),
-          getDemoScenario(),
-          getEvents(),
-          getHedgeOrders(),
-          getHedgeFills(),
-        ]);
+        const workspace = await getDemoWorkspace();
         if (!active) return;
-        setDeskState(currentDeskState);
-        setScenario(currentScenario);
-        setEvents(currentEvents);
-        setHedgeOrders(currentHedgeOrders);
-        setHedgeFills(currentHedgeFills);
-        if (currentHedgeOrders.length > 0) {
-          const existingSpotOrder = currentHedgeOrders.find(
-            (order) => order.instrument_type === "SPOT",
-          );
-          setSpotAllocation(existingSpotOrder?.quantity_btc ?? "0");
-        }
-        setStage(currentScenario ? "filled" : "idle");
+        applyWorkspace(workspace);
         setApiState("online");
       } catch {
         if (!active) return;
@@ -97,14 +86,17 @@ export default function Home() {
         setError(
           "Backend unavailable. Start the FastAPI service on port 8000, then refresh.",
         );
+      } finally {
+        if (active) pollTimer = window.setTimeout(pollWorkspace, 500);
       }
     }
 
-    void loadBackendState();
+    void pollWorkspace();
     return () => {
       active = false;
+      if (pollTimer !== undefined) window.clearTimeout(pollTimer);
     };
-  }, []);
+  }, [applyWorkspace]);
 
   useEffect(() => {
     let active = true;
@@ -133,11 +125,14 @@ export default function Home() {
     };
   }, []);
 
-  const scenarioReferencePrice = scenario
-    ? Number(scenario.market_snapshot.reference_price_usd)
-    : null;
+  const scenario = completedScenarios.at(-1) ?? null;
+  const pendingRfq = pendingRfqs.at(-1) ?? null;
+
   const liveBook = marketState?.book ?? null;
   const liveMidPrice = liveBook ? Number(liveBook.mid_price) : null;
+  const deltaMarkPrice = liveMidPrice ?? (
+    scenario ? Number(scenario.market_snapshot.reference_price_usd) : null
+  );
   const marketStatus = marketPollFailed
     ? "DISCONNECTED"
     : (marketState?.connection.status ?? "CONNECTING");
@@ -145,10 +140,12 @@ export default function Home() {
   const workingDelta = Number(deskState.working_order_delta_btc);
   const projectedDelta = totalDelta + workingDelta;
   const deltaNotional =
-    scenarioReferencePrice === null ? null : totalDelta * scenarioReferencePrice;
-  const demoHedgeQuantity = scenario
-    ? Math.abs(Number(scenario.desk_state_after.total_delta_btc))
-    : 0;
+    deltaMarkPrice === null ? null : totalDelta * deltaMarkPrice;
+  const activeHedgeOrders = hedgeOrders.filter((order) => order.status !== "FILLED");
+  const hedgeOrdersCreated = activeHedgeOrders.length > 0;
+  const demoHedgeQuantity = hedgeOrdersCreated
+    ? activeHedgeOrders.reduce((sum, order) => sum + Number(order.quantity_btc), 0)
+    : Math.abs(totalDelta);
   const hasValidSpotPrecision = /^\d+(?:\.\d{0,2})?$/.test(spotAllocation);
   const spotAllocationNumber = hasValidSpotPrecision
     ? Number(spotAllocation)
@@ -160,10 +157,21 @@ export default function Home() {
     Number.isFinite(spotAllocationNumber) &&
     spotAllocationNumber >= 0 &&
     spotAllocationNumber <= demoHedgeQuantity;
-  const hedgeOrdersCreated = hedgeOrders.length > 0;
-  const canReviseAllocation = hedgeOrdersCreated && hedgeFills.length === 0;
+  const requiredHedgeDelta = hedgeOrdersCreated
+    ? activeHedgeOrders.reduce(
+        (sum, order) => sum + signedHedgeOrderQuantity(order),
+        0,
+      )
+    : -totalDelta;
+  const hedgeOutcomeDelta = totalDelta + requiredHedgeDelta;
+  const spotHedgeSide = requiredHedgeDelta >= 0 ? "BUY" : "SELL";
+  const spotReferencePrice = liveBook
+    ? Number(spotHedgeSide === "BUY" ? liveBook.best_ask : liveBook.best_bid)
+    : null;
+  const canReviseAllocation =
+    hedgeOrdersCreated && activeHedgeOrders.every((order) => Number(order.filled_quantity_btc) === 0);
   const allHedgeOrdersFilled =
-    hedgeOrdersCreated && hedgeOrders.every((order) => order.status === "FILLED");
+    hedgeOrders.length > 0 && hedgeOrders.every((order) => order.status === "FILLED");
   const canSimulateHalfFill = hedgeOrders.some(
     (order) =>
       Number(order.filled_quantity_btc) === 0 &&
@@ -172,56 +180,28 @@ export default function Home() {
   const canFillRemainder = hedgeOrders.some(
     (order) => Number(order.remaining_quantity_btc) > 0,
   );
-  const visibleEvents = useMemo(() => {
-    if (!scenario) return [];
-    if (stage === "accepted") return scenario.events.slice(0, 4);
-    if (stage === "filled") return events;
-    return [];
-  }, [events, scenario, stage]);
+  const visibleEvents = useMemo(() => events.slice(-30), [events]);
 
   async function refreshHedgeState() {
-    const [currentDeskState, currentHedgeOrders, currentHedgeFills, currentEvents] =
-      await Promise.all([
-        getDeskState(),
-        getHedgeOrders(),
-        getHedgeFills(),
-        getEvents(),
-      ]);
-    setDeskState(currentDeskState);
-    setHedgeOrders(currentHedgeOrders);
-    setHedgeFills(currentHedgeFills);
-    setEvents(currentEvents);
+    applyWorkspace(await getDemoWorkspace());
   }
 
-  async function handleInjectRfq() {
+  async function handleFlowToggle() {
     if (busy) return;
     setBusy(true);
     setError(null);
     setNotice(null);
-    setStage("pricing");
 
     try {
-      const [result] = await Promise.all([runDemoClientTrade(), delay(650)]);
-      setScenario(result);
+      const nextFlowState = flowActive
+        ? await pauseClientFlow()
+        : await resumeClientFlow();
+      setFlowActive(nextFlowState.active);
       setApiState("online");
-
-      if (result.replayed) {
-        await refreshHedgeState();
-        setStage("filled");
-        setNotice("Replay detected — the existing client trade was not booked twice.");
-        return;
-      }
-
-      setDeskState(result.desk_state_before);
-      setStage("accepted");
-      await delay(800);
-      setDeskState(result.desk_state_after);
-      setEvents(result.events);
-      setStage("filled");
+      setNotice(nextFlowState.active ? "Slow client flow resumed." : "New client RFQ arrivals paused.");
     } catch {
-      setStage(scenario ? "filled" : "idle");
       setApiState("offline");
-      setError("The RFQ could not be processed because the backend is unavailable.");
+      setError("Client flow could not be updated because the backend is unavailable.");
     } finally {
       setBusy(false);
     }
@@ -236,12 +216,13 @@ export default function Home() {
     try {
       const resetState = await resetDemo();
       setDeskState(resetState);
-      setScenario(null);
+      setCompletedScenarios([]);
+      setPendingRfqs([]);
+      setCompletedFlowCount(0);
       setEvents([]);
       setHedgeOrders([]);
       setHedgeFills([]);
       setSpotAllocation("0.10");
-      setStage("idle");
       setApiState("online");
     } catch {
       setApiState("offline");
@@ -252,13 +233,22 @@ export default function Home() {
   }
 
   async function handleCreateHedgeOrders() {
-    if (busy || !scenario || !validAllocation || hedgeOrdersCreated) return;
+    if (
+      busy ||
+      !scenario ||
+      !validAllocation ||
+      hedgeOrdersCreated ||
+      demoHedgeQuantity === 0
+    ) return;
     setBusy(true);
     setError(null);
     setNotice(null);
 
     try {
-      await createManualHedgeOrders(spotAllocation);
+      await createManualHedgeOrders(
+        spotAllocation,
+        `manual-hedge-v${deskState.version}-${Date.now()}`,
+      );
       await refreshHedgeState();
       setApiState("online");
       setNotice(
@@ -309,7 +299,7 @@ export default function Home() {
       }
       await refreshHedgeState();
       setApiState("online");
-      setNotice("Partial demo fills applied — actual and working delta moved together.");
+      setNotice("Partial demo fills applied — actual exposure moved and working delta was reduced.");
     } catch (caught) {
       await refreshHedgeState().catch(() => undefined);
       setError(apiErrorMessage(caught, "The partial fills could not be completed."));
@@ -337,7 +327,7 @@ export default function Home() {
       await refreshHedgeState();
       setApiState("online");
       setNotice(
-        "All hedge orders filled — actual total delta now matches the Step 4 demo target.",
+        "All current hedge orders filled — working delta cleared; actual delta includes any later client flow.",
       );
     } catch (caught) {
       await refreshHedgeState().catch(() => undefined);
@@ -459,29 +449,39 @@ export default function Home() {
             )}
           </Panel>
 
-          <Panel title="RFQ Inbox" meta={stage === "idle" ? "0 active" : "1 active"} grow>
+          <Panel
+            title="RFQ Inbox"
+            meta={`${pendingRfqs.length} pricing · ${completedFlowCount} filled`}
+            grow
+          >
             <div className="rfq-list">
-              {stage === "pricing" ? (
-                <div className="rfq-card active incoming-rfq">
-                  <span className="rfq-side">INCOMING</span>
-                  <strong>Institutional RFQ</strong>
+              {pendingRfqs.map((pending) => (
+                <div className="rfq-card active incoming-rfq" key={pending.rfq.rfq_id}>
+                  <span className={`rfq-side ${pending.rfq.client_side === "BUY" ? "bid" : "ask"}`}>
+                    {pending.rfq.client_side}
+                  </span>
+                  <strong>{formatQuantity(pending.rfq.quantity_btc)} BTC</strong>
                   <span className="status-tag status-pricing"><Spinner /> PRICING</span>
-                  <small>Validating notional and generating quote</small>
+                  <small>{pending.rfq.client_id} · {formatCompactUsd(Number(pending.rfq.validated_notional_usd))}</small>
+                  <time>{formatTime(pending.rfq.received_at)}</time>
                 </div>
-              ) : scenario ? (
-                <div className="rfq-card active">
-                  <span className={`rfq-side ${scenario.rfq.client_side === "BUY" ? "bid" : "ask"}`}>
-                    {scenario.rfq.client_side}
+              ))}
+              {[...completedScenarios].reverse().slice(0, 6).map((completed) => (
+                <div className="rfq-card" key={completed.rfq.rfq_id}>
+                  <span className={`rfq-side ${completed.rfq.client_side === "BUY" ? "bid" : "ask"}`}>
+                    {completed.rfq.client_side}
                   </span>
-                  <strong>{formatQuantity(scenario.rfq.quantity_btc)} BTC</strong>
-                  <span className={`status-tag ${stage === "accepted" ? "status-accepted" : "status-filled"}`}>
-                    {stage === "accepted" ? "✓ ACCEPTED" : "FILLED"}
-                  </span>
-                  <small>{scenario.rfq.client_id} · {formatCompactUsd(Number(scenario.rfq.validated_notional_usd))}</small>
-                  <time>{formatTime(scenario.rfq.received_at)}</time>
+                  <strong>{formatQuantity(completed.rfq.quantity_btc)} BTC</strong>
+                  <span className="status-tag status-filled">✓ ACCEPTED</span>
+                  <small>{completed.rfq.client_id} · {formatCompactUsd(Number(completed.rfq.validated_notional_usd))}</small>
+                  <time>{formatTime(completed.rfq.received_at)}</time>
                 </div>
-              ) : (
-                <EmptyState title="No client RFQs" detail="Use Inject RFQ to run the deterministic backend chain." />
+              ))}
+              {pendingRfqs.length === 0 && completedScenarios.length === 0 && (
+                <EmptyState
+                  title="Waiting for institutional flow"
+                  detail="The backend will introduce valid institutional RFQs asynchronously."
+                />
               )}
             </div>
           </Panel>
@@ -492,11 +492,8 @@ export default function Home() {
               <strong className={flowActive ? "positive" : "warning"}>{flowActive ? "ACTIVE" : "PAUSED"}</strong>
               <small>Orders arrive asynchronously</small>
             </div>
-            <button disabled={busy} type="button" onClick={() => setFlowActive((active) => !active)}>
+            <button disabled={busy} type="button" onClick={handleFlowToggle}>
               {flowActive ? "PAUSE" : "RESUME"}
-            </button>
-            <button disabled={busy || apiState === "connecting"} type="button" className="accent-outline" onClick={handleInjectRfq}>
-              {busy ? "PROCESSING" : "INJECT RFQ"}
             </button>
             <button disabled={busy || apiState === "connecting"} type="button" className="reset-button" onClick={handleReset}>
               RESET DEMO
@@ -505,10 +502,18 @@ export default function Home() {
         </aside>
 
         <section className="center-stage">
-          <Panel title="Demo Client Quote · Active RFQ" meta={activeRfqMeta(stage, scenario)}>
-            {stage === "pricing" ? (
+          <Panel title="Demo Client Quote · Active RFQ" meta={activeRfqMeta(pendingRfq, scenario)}>
+            {pendingRfq ? (
               <div className="active-rfq active-rfq-loading">
-                <div><div className="active-rfq-size">Pricing incoming RFQ</div><p>Notional validation passed before the trade can enter the flow.</p></div>
+                <div>
+                  <div className="active-rfq-size">
+                    <span className={pendingRfq.rfq.client_side === "BUY" ? "bid" : "ask"}>
+                      {pendingRfq.rfq.client_side}
+                    </span>{" "}
+                    {formatQuantity(pendingRfq.rfq.quantity_btc)} BTC
+                  </div>
+                  <p>{pendingRfq.rfq.client_id} · {formatCompactUsd(Number(pendingRfq.rfq.validated_notional_usd))} · preparing demo quote</p>
+                </div>
                 <span className="pricing-status" role="status"><Spinner /> PRICING</span>
               </div>
             ) : scenario ? (
@@ -519,7 +524,7 @@ export default function Home() {
                       <span className={scenario.rfq.client_side === "BUY" ? "bid" : "ask"}>{scenario.rfq.client_side}</span>{" "}
                       {formatQuantity(scenario.rfq.quantity_btc)} BTC
                     </div>
-                    <p>{scenario.rfq.client_id} · Client buys BTC from desk · {formatCompactUsd(Number(scenario.rfq.validated_notional_usd))}</p>
+                    <p>{scenario.rfq.client_id} · {clientTradeDescription(scenario)} · {formatCompactUsd(Number(scenario.rfq.validated_notional_usd))}</p>
                   </div>
                   <span className="auto-accepted"><span className="status-check">✓</span> AUTO-ACCEPTED</span>
                 </div>
@@ -528,7 +533,10 @@ export default function Home() {
                   <div className="quote-prices">
                     <span className="eyebrow">Accepted client quote</span>
                     <div className="price-pair single-price">
-                      <div><small>CLIENT ASK · TRADED</small><strong className="ask">{formatUsd(Number(scenario.quote.quoted_price_usd))}</strong></div>
+                      <div>
+                        <small>{scenario.rfq.client_side === "BUY" ? "CLIENT ASK" : "CLIENT BID"} · TRADED</small>
+                        <strong className={scenario.rfq.client_side === "BUY" ? "ask" : "bid"}>{formatUsd(Number(scenario.quote.quoted_price_usd))}</strong>
+                      </div>
                     </div>
                   </div>
                   <div className="quote-breakdown">
@@ -536,12 +544,12 @@ export default function Home() {
                     <LineItem label="Reference price" value={formatUsd(Number(scenario.market_snapshot.reference_price_usd))} />
                     <LineItem label="Quote revision" value={`R${scenario.quote.revision}`} />
                     <LineItem label="Desk state used" value={`v${scenario.quote.desk_state_version}`} />
-                    <LineItem label="Pricing source" value="STEP 2 FIXTURE" />
+                    <LineItem label="Pricing source" value={formatPricingSource(scenario.quote.pricing_source)} />
                   </div>
                 </div>
               </>
             ) : (
-              <EmptyState title="No active client RFQ" detail="The backend is flat and ready for a deterministic client trade." roomy />
+              <EmptyState title="No active client RFQ" detail="Slow client flow is running in the background; arrivals are intentionally not predicted." roomy />
             )}
           </Panel>
 
@@ -553,7 +561,7 @@ export default function Home() {
             {!scenario ? (
               <EmptyState
                 title="No exposure to hedge"
-                detail="Book the fixed client trade before creating a manual hedge allocation."
+                detail="The slow client-flow simulator has not booked its first auto-accepted trade yet."
                 roomy
               />
             ) : mode === "auto" ? (
@@ -565,8 +573,8 @@ export default function Home() {
               <div className="hedge-workspace">
                 <div className="recommendation-grid">
                   <div>
-                    <small>STEP 4 DEMO TARGET</small>
-                    <strong>0.00 BTC</strong>
+                    <small>{hedgeOrdersCreated ? "CURRENT ORDERS PROJECT TO" : "EXPLICIT DEMO TARGET"}</small>
+                    <strong>{formatBtc(hedgeOutcomeDelta)}</strong>
                   </div>
                   <div>
                     <small>ACTUAL DELTA</small>
@@ -622,14 +630,14 @@ export default function Home() {
                 </div>
 
                 <div className="allocation-summary">
-                  <span>Client fill creates {formatBtc(Number(scenario.desk_state_after.total_delta_btc))}</span>
+                  <span>Current exposure {formatBtc(totalDelta)}</span>
                   <span>→</span>
-                  <span>Manual hedge requires <strong>+{demoHedgeQuantity.toFixed(2)} BTC</strong></span>
+                  <span>Manual hedge requires <strong>{formatBtc(requiredHedgeDelta)}</strong></span>
                   <span>→</span>
-                  <span>Target <strong>0.00 BTC</strong></span>
+                  <span>Projected <strong>{formatBtc(hedgeOutcomeDelta)}</strong></span>
                 </div>
                 <p className="demo-policy-note">
-                  Enter the editable Spot quantity; the backend calculates the exact Perp remainder. This is an explicit demo target, not a Risk Policy recommendation.
+                  Enter the editable Spot quantity; the backend calculates the exact Perp remainder. This is an explicit demo target, not a Risk Policy recommendation. New client fills remain independent and can move projected delta while these orders are still working.
                 </p>
 
                 <div className={`market-candidate ${marketStatus !== "LIVE" ? "unavailable" : ""}`}>
@@ -639,10 +647,10 @@ export default function Home() {
                   </div>
                   {marketStatus === "LIVE" && liveBook ? (
                     <div className="market-candidate-grid">
-                      <div><small>SIDE</small><strong className="bid">BUY</strong></div>
+                      <div><small>SIDE</small><strong className={spotHedgeSide === "BUY" ? "bid" : "ask"}>{spotHedgeSide}</strong></div>
                       <div><small>MANUAL SPOT QTY</small><strong>{validAllocation ? `${spotAllocationNumber.toFixed(2)} BTC` : "INVALID"}</strong></div>
-                      <div><small>BEST ASK REFERENCE</small><strong>{formatUsd(Number(liveBook.best_ask))}</strong></div>
-                      <div><small>INDICATIVE NOTIONAL</small><strong>{validAllocation ? formatCompactUsd(spotAllocationNumber * Number(liveBook.best_ask)) : "—"}</strong></div>
+                      <div><small>BEST {spotHedgeSide === "BUY" ? "ASK" : "BID"} REFERENCE</small><strong>{spotReferencePrice === null ? "—" : formatUsd(spotReferencePrice)}</strong></div>
+                      <div><small>INDICATIVE NOTIONAL</small><strong>{validAllocation && spotReferencePrice !== null ? formatCompactUsd(spotAllocationNumber * spotReferencePrice) : "—"}</strong></div>
                     </div>
                   ) : (
                     <p>
@@ -658,7 +666,7 @@ export default function Home() {
                 <div className="decision-actions">
                   <button
                     className="primary-action"
-                    disabled={busy || hedgeOrdersCreated || !validAllocation}
+                    disabled={busy || hedgeOrdersCreated || !validAllocation || demoHedgeQuantity === 0}
                     onClick={handleCreateHedgeOrders}
                     type="button"
                   >
@@ -699,7 +707,7 @@ export default function Home() {
                   </div>
                 </div>
 
-                {allHedgeOrdersFilled && (
+                {allHedgeOrdersFilled && totalDelta === 0 && workingDelta === 0 && (
                   <div className="hedge-complete" role="status">
                     <span className="status-check">✓</span>
                     <div>
@@ -721,12 +729,12 @@ export default function Home() {
                   <div className="event-row" key={event.event_id}>
                     <time>{formatTime(event.occurred_at)}</time>
                     <span>{event.event_type}</span>
-                    <p>{describeEvent(event, scenario)}</p>
+                    <p>{describeEvent(event)}</p>
                   </div>
                 ))}
               </div>
             ) : (
-              <EmptyState title="No events" detail={stage === "pricing" ? "Waiting for the backend response." : "Run the client-trade demo to create the causal event sequence."} />
+              <EmptyState title="No events" detail={pendingRfq ? "Waiting for the backend pricing response." : "Waiting for the first automatic client RFQ."} />
             )}
           </Panel>
         </section>
@@ -816,11 +824,13 @@ function UnavailableFeature({ title, detail, compact = false }: { title: string;
   return <div className={`unavailable-feature ${compact ? "compact" : ""}`}><span className="unavailable-mark">—</span><div><strong>{title}</strong><p>{detail}</p></div></div>;
 }
 
-function activeRfqMeta(stage: DemoStage, scenario: DemoScenarioResult | null): string {
-  if (stage === "pricing") return "PRICING";
+function activeRfqMeta(
+  pending: PendingClientFlow | null,
+  scenario: DemoScenarioResult | null,
+): string {
+  if (pending) return `${pending.rfq.rfq_id} · PRICING`;
   if (!scenario) return "NO ACTIVE RFQ";
-  if (stage === "accepted") return `${scenario.rfq.rfq_id} · QUOTE ACCEPTED`;
-  return `${scenario.rfq.rfq_id} · CLIENT FILLED`;
+  return `${scenario.rfq.rfq_id} · AUTO-ACCEPTED & FILLED`;
 }
 
 function marketBookMeta(state: MarketStateView | null, status: string): string {
@@ -831,19 +841,18 @@ function marketBookMeta(state: MarketStateView | null, status: string): string {
   return `${status} · ${age < 1000 ? `${age}ms` : `${(age / 1000).toFixed(1)}s`} OLD`;
 }
 
-function describeEvent(event: FlowEvent, scenario: DemoScenarioResult | null): string {
-  if (!scenario) return event.aggregate_id;
+function describeEvent(event: FlowEvent): string {
   switch (event.event_type) {
     case "RFQ_RECEIVED":
-      return `${scenario.rfq.client_id} ${scenario.rfq.client_side} ${formatQuantity(scenario.rfq.quantity_btc)} BTC`;
+      return `${String(event.payload.client_side)} ${payloadNumber(event, "quantity_btc").toFixed(2)} BTC`;
     case "RFQ_VALIDATED":
-      return `${formatCompactUsd(Number(scenario.rfq.validated_notional_usd))} · notional > $500K`;
+      return `${formatCompactUsd(payloadNumber(event, "notional_usd"))} · notional > $500K`;
     case "QUOTE_GENERATED":
-      return `Client quote ${formatUsd(Number(scenario.quote.quoted_price_usd))}`;
+      return `Client quote ${formatUsd(payloadNumber(event, "quoted_price_usd"))}`;
     case "QUOTE_ACCEPTED":
       return "AUTO_ACCEPT · no client decision model";
     case "CLIENT_FILL":
-      return `Desk spot change ${formatBtc(-Number(scenario.client_trade.quantity_btc))}`;
+      return `Desk spot change ${formatBtc(payloadNumber(event, "desk_spot_change_btc"))}`;
     case "HEDGE_ORDER_CREATED":
       return `${String(event.payload.instrument_type)} ${String(event.payload.side)} ${formatBtc(payloadNumber(event, "quantity_btc"))} · working only`;
     case "HEDGE_FILL":
@@ -857,6 +866,23 @@ function describeEvent(event: FlowEvent, scenario: DemoScenarioResult | null): s
     default:
       return event.aggregate_id;
   }
+}
+
+function clientTradeDescription(scenario: DemoScenarioResult): string {
+  return scenario.rfq.client_side === "BUY"
+    ? "Client buys BTC from desk"
+    : "Client sells BTC to desk";
+}
+
+function formatPricingSource(source: string): string {
+  return source === "DEMO_KRAKEN_TOUCH_AUTO_ACCEPT"
+    ? "DEMO KRAKEN TOUCH"
+    : source.replaceAll("_", " ");
+}
+
+function signedHedgeOrderQuantity(order: HedgeOrder): number {
+  const quantity = Number(order.remaining_quantity_btc);
+  return order.side === "BUY" || order.side === "LONG" ? quantity : -quantity;
 }
 
 function payloadNumber(event: FlowEvent, key: string): number {

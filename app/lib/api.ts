@@ -1,5 +1,7 @@
 import type {
+  ClientFlowState,
   DemoScenarioResult,
+  DemoWorkspaceState,
   DeskState,
   FlowEvent,
   HedgeCancellationResult,
@@ -60,6 +62,18 @@ export function getDemoScenario(): Promise<DemoScenarioResult | null> {
   return request<DemoScenarioResult | null>("/demo/scenario");
 }
 
+export function getDemoWorkspace(): Promise<DemoWorkspaceState> {
+  return request<DemoWorkspaceState>("/demo/workspace");
+}
+
+export function pauseClientFlow(): Promise<ClientFlowState> {
+  return request<ClientFlowState>("/demo/client-flow/pause", { method: "POST" });
+}
+
+export function resumeClientFlow(): Promise<ClientFlowState> {
+  return request<ClientFlowState>("/demo/client-flow/resume", { method: "POST" });
+}
+
 export function runDemoClientTrade(): Promise<DemoScenarioResult> {
   return request<DemoScenarioResult>("/demo/run-client-trade", {
     method: "POST",
@@ -93,12 +107,13 @@ export function getMarketState(
 
 export function createManualHedgeOrders(
   spotQuantityBtc: string,
+  batchId: string,
 ): Promise<HedgeOrderBatchResult> {
   return request<HedgeOrderBatchResult>("/demo/hedge-orders", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      batch_id: "step4-manual-hedge",
+      batch_id: batchId,
       spot_quantity_btc: spotQuantityBtc,
     }),
   });

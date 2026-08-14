@@ -1,10 +1,11 @@
 # FlowHedge
 
 FlowHedge is an institutional crypto sales-trading simulator. The current
-checkpoint contains the reviewable trading-terminal layout and a deterministic
-backend accounting chain from RFQ through client fill, manual Spot/Perp hedge
-orders, simulated fills, and desk-state updates. It also consumes Kraken's
-public BTC/USD Spot order book through a venue-neutral market-data layer.
+checkpoint contains the reviewable trading-terminal layout, a backend-driven
+institutional client-flow simulator, and an accounting chain from RFQ through
+client fill, manual Spot/Perp hedge orders, simulated fills, and desk-state
+updates. It also consumes Kraken's public BTC/USD Spot order book through a
+venue-neutral market-data layer.
 Production pricing, hedge optimization, risk policy, and PnL logic remain
 deferred.
 
@@ -12,8 +13,8 @@ deferred.
 
 - **Header:** instrument, live Kraken Spot mid-price, independent API/market connectivity, and manual/auto hedge mode.
 - **Desk strip:** actual, working, and projected delta plus Spot and derivative positions.
-- **Left rail:** live Kraken depth-25 book, asynchronous RFQ inbox, flow pause/resume, and manual RFQ injection.
-- **Center stage:** fixture client quote, live-but-not-optimized Kraken hedge reference, manual hedge allocation and simulated fill controls, and event tape.
+- **Left rail:** live Kraken depth-25 book, multi-order RFQ inbox, and backend flow pause/resume controls.
+- **Center stage:** pending/accepted demo client quotes, live-but-not-optimized Kraken hedge reference, manual hedge allocation and simulated fill controls, and event tape.
 - **Right rail:** reconciled desk positions, deferred PnL, and the hedge order/fill blotter.
 
 No countdown or prediction of the next client RFQ is shown. Orders are modeled
@@ -74,14 +75,16 @@ The fixture quote is not the future pricing engine.
 
 ## Step 3 frontend integration
 
-The React terminal now reads the fixed scenario from FastAPI instead of showing
-invented trading results. Use **Inject RFQ** to replay the backend event chain:
+The React terminal reads scenario and accounting state from FastAPI instead of
+showing invented trading results. The original deterministic endpoint remains
+available as a regression-test seam for this event chain:
 
 `PRICING → AUTO-ACCEPTED → CLIENT FILLED → POSITION UPDATED`
 
-The first run moves the desk from flat to `-5 BTC` spot inventory and total
-delta. A repeated run is identified as a replay and cannot book the same client
-trade twice. **Reset Demo** returns the backend and UI to version zero.
+The deterministic test run moves the desk from flat to `-5 BTC` spot inventory
+and total delta. A repeated run is identified as a replay and cannot book the
+same client trade twice. The normal page no longer exposes a manual Inject RFQ
+button. **Reset Demo** clears all current client and hedge state.
 
 Risk Policy, automatic hedge recommendations, and PnL remain visibly marked as
 unavailable until their later accounting steps are implemented.
@@ -91,21 +94,21 @@ set `NEXT_PUBLIC_FLOWHEDGE_API_URL` before starting the frontend.
 
 ## Step 4 hedge execution demo
 
-After the client fill creates `-5 BTC` of actual delta, manual mode exposes an
-explicit Step 4 demo target of `0 BTC`. Enter an editable Spot quantity with at
-most two decimal places; the backend calculates the exact Perp remainder so the
-submitted hedge totals `+5 BTC`.
+Manual mode exposes an explicit demo target of `0 BTC`. Enter an editable Spot
+quantity with at most two decimal places; the backend calculates the exact Perp
+remainder required for the desk's current accumulated exposure.
 
 - `POST /demo/hedge-orders` records the manual Spot/Perp instructions. Actual
-  positions do not change; working delta becomes `+5 BTC`, making projected
-  delta `0 BTC`.
+  positions do not change until fills; only working and projected delta change.
 - `POST /demo/hedge-orders/{order_id}/fills` records an immutable simulated
   fill. Only these fills change Spot inventory or derivative delta.
 - `POST /demo/hedge-orders/cancel` cancels an untouched hedge batch so its
   allocation can be edited. Once any fill exists, history cannot be rewritten.
 - Clearly labelled demo controls can apply partial fills, then fill the
-  remainder so actual and working delta move in opposite directions until
-  actual total delta reaches `0 BTC`.
+  remainder so actual and working delta move in opposite directions while
+  projected exposure remains reconciled. A completed batch does not prevent a
+  later client exposure from receiving a new manual hedge batch, and completed
+  orders remain visible in the hedge blotter.
 - `GET /demo/hedge-orders` and `GET /demo/hedge-fills` restore the blotter after
   a page refresh. Reset clears client trades, hedge orders, fills, and events.
 
@@ -132,7 +135,7 @@ normalized book.
   venue/symbol. It stores no historical tick stream and does not grow with the
   number of updates.
 
-The live Kraken best ask can be displayed as a manual Spot market candidate,
+The live Kraken best bid or ask can be displayed as a manual Spot market candidate,
 but it is explicitly not a hedge recommendation and does not change the fixed
 client quote or simulated fill accounting. The adapter interface, canonical
 symbols, normalized models, registry, and keyed state store leave room for
@@ -142,6 +145,31 @@ This step intentionally does not include a second venue, Kraken Futures/Perp,
 private API keys, real orders, Risk Policy, Hedge Optimizer, smart order
 routing, Pricing Engine, fees, funding, margin, PnL, or historical market-data
 storage.
+
+## Step 5 slow automatic client flow
+
+The normal demo is now driven by a backend Client Flow Simulator rather than a
+page button. In manual-trader mode it waits a randomly jittered slow interval of
+75–105 seconds between arrivals, centered around roughly 90 seconds. The next
+arrival time is intentionally not exposed to the UI.
+
+- Every generated RFQ uses the captured Kraken mid-price to calculate a varied
+  two-decimal BTC quantity whose notional is strictly greater than USD 500,000.
+  The generator produces both whole and fractional quantities and both client
+  BUY and SELL sides.
+- A new RFQ first remains in `PRICING` so the page can show a spinner. The demo
+  then quotes at the captured Kraken touch, auto-accepts the quote, records the
+  client trade, and updates inventory, delta, notional, RFQ history, and events.
+- This touch-price rule is labelled `DEMO_KRAKEN_TOUCH_AUTO_ACCEPT`; it is a
+  transparent simulation rule, not the future Pricing Engine.
+- New client trades do not wait for previous hedge orders to finish. Existing
+  working hedge delta remains intact while each accepted client fill changes
+  actual inventory and projected exposure.
+- `GET /demo/workspace` gives the frontend one coherent polling view. Pause and
+  resume affect the backend arrival process, while Reset clears the session and
+  restarts its slow schedule.
+- `POST /demo/client-flow/generate` remains available only as a test-support
+  seam; the normal page never calls or displays it.
 
 ## Validate
 

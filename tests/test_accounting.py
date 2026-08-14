@@ -135,7 +135,7 @@ def test_reset_clears_the_booked_scenario_and_event_ledger() -> None:
 def test_hedge_orders_require_client_trade_and_valid_two_decimal_spot_quantity() -> None:
     service = DemoTradingService()
 
-    with pytest.raises(DemoStateError, match="book the fixed client trade"):
+    with pytest.raises(DemoStateError, match="book a client trade"):
         service.create_manual_hedge_orders(Decimal("3"), "batch-before-client-trade")
 
     service.run_fixed_client_trade()
