@@ -1,10 +1,10 @@
 # FlowHedge
 
-FlowHedge is an institutional crypto sales-trading simulator. This first
-checkpoint contains the reviewable trading-terminal layout and a minimal
-FastAPI shell. Exchange connectivity, client-flow generation, pricing, hedge
-optimization, execution simulation, inventory, risk, and PnL logic are
-intentionally deferred until the layout is approved.
+FlowHedge is an institutional crypto sales-trading simulator. The current
+checkpoint contains the reviewable trading-terminal layout and a deterministic
+backend accounting chain from RFQ through client fill and desk-state update.
+Exchange connectivity, production pricing, hedge optimization, execution
+simulation, risk, and PnL logic remain deferred.
 
 ## Current layout
 
@@ -49,9 +49,29 @@ Then open:
 
 The frontend currently uses static placeholder state and does not call this API.
 
+## Step 2 accounting demo
+
+The backend exposes a fixed, repeatable scenario for checking the accounting
+rules before the UI is connected:
+
+- `POST /demo/reset` returns the desk to a flat version-zero state.
+- `POST /demo/run-client-trade` processes a valid USD 590,000 client BUY RFQ,
+  auto-accepts a clearly marked fixture quote, records one immutable client
+  trade, and moves desk spot inventory and total delta from `0` to `-5 BTC`.
+- Repeating the same demo call returns an idempotent replay and does not book the
+  trade twice.
+- `POST /rfqs/validate` checks that RFQ notional is strictly greater than USD
+  500,000 using the supplied reference price.
+- `GET /desk/state` and `GET /events` expose the resulting aggregate state and
+  causal event sequence.
+
+The fixture quote is not the future pricing engine.
+
 ## Validate
 
 ```bash
 npm run build
 npm test
+source .venv/bin/activate
+python -m pytest
 ```
