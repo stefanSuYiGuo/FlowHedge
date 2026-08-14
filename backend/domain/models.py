@@ -273,6 +273,8 @@ class HedgeOrderBatchResult(BaseModel):
     batch_id: str
     demo_target_total_delta_btc: Decimal
     required_hedge_delta_btc: Decimal
+    submitted_hedge_delta_btc: Decimal
+    projected_total_delta_btc: Decimal
     orders: tuple[HedgeOrder, ...]
     desk_state_before: DeskState
     desk_state_after: DeskState

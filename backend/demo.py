@@ -55,7 +55,7 @@ class DemoStateError(ValueError):
 
 
 class HedgeAllocationError(ValueError):
-    """Raised when the manual Spot/Perp split cannot reach the demo target."""
+    """Raised when a manual Spot/Perp allocation is invalid."""
 
 
 class HedgeFillError(ValueError):
@@ -447,18 +447,25 @@ class DemoTradingService:
     def create_manual_hedge_orders(
         self,
         spot_quantity_btc: Decimal,
+        perp_quantity_btc: Decimal,
         batch_id: str,
     ) -> HedgeOrderBatchResult:
-        """Create a manual Spot hedge and calculate the exact Perp remainder."""
+        """Create an independently chosen Spot/Perp hedge without over-hedging."""
 
-        if spot_quantity_btc < 0:
-            raise HedgeAllocationError("spot hedge quantity cannot be negative")
-        if spot_quantity_btc != spot_quantity_btc.quantize(
-            STEP_4_QUANTITY_INCREMENT_BTC
+        for instrument_name, quantity_btc in (
+            ("spot", spot_quantity_btc),
+            ("perpetual", perp_quantity_btc),
         ):
-            raise HedgeAllocationError(
-                "spot hedge quantity supports at most two decimal places"
-            )
+            if quantity_btc < 0:
+                raise HedgeAllocationError(
+                    f"{instrument_name} hedge quantity cannot be negative"
+                )
+            if quantity_btc != quantity_btc.quantize(
+                STEP_4_QUANTITY_INCREMENT_BTC
+            ):
+                raise HedgeAllocationError(
+                    f"{instrument_name} hedge quantity supports at most two decimal places"
+                )
 
         existing_batch_is_complete = bool(self.hedge_orders) and all(
             order.status is HedgeOrderStatus.FILLED
@@ -475,9 +482,15 @@ class DemoTradingService:
                 for order in self.saved_order_batch.orders
                 if order.instrument_type is InstrumentType.SPOT
             )
+            original_perp = sum(
+                order.quantity_btc
+                for order in self.saved_order_batch.orders
+                if order.instrument_type is InstrumentType.PERPETUAL
+            )
             if (
                 self.saved_order_batch.batch_id == batch_id
                 and original_spot == spot_quantity_btc
+                and original_perp == perp_quantity_btc
             ):
                 return self.saved_order_batch.model_copy(update={"replayed": True})
             raise DemoStateError(
@@ -492,15 +505,24 @@ class DemoTradingService:
 
         if required_hedge_delta == 0:
             raise DemoStateError("the desk is already at the Step 4 demo target")
-        if spot_quantity_btc > abs(required_hedge_delta):
+        submitted_quantity_btc = spot_quantity_btc + perp_quantity_btc
+        if submitted_quantity_btc == 0:
             raise HedgeAllocationError(
-                "spot hedge quantity cannot exceed the absolute required hedge delta "
+                "at least one manual hedge quantity must be greater than zero"
+            )
+        if submitted_quantity_btc > abs(required_hedge_delta):
+            raise HedgeAllocationError(
+                "combined Spot and Perp hedge quantity cannot exceed the absolute "
+                "required hedge delta "
                 f"({abs(required_hedge_delta)} BTC)"
             )
-        perp_quantity_btc = abs(required_hedge_delta) - spot_quantity_btc
 
         created_at = utc_now()
         increasing_delta = required_hedge_delta > 0
+        submitted_hedge_delta = (
+            submitted_quantity_btc if increasing_delta else -submitted_quantity_btc
+        )
+        projected_total_delta = before.total_delta_btc + submitted_hedge_delta
         orders: list[HedgeOrder] = []
         self.hedge_order_revision += 1
         revision = self.hedge_order_revision
@@ -550,7 +572,7 @@ class DemoTradingService:
             derivative_delta_btc=before.derivative_delta_btc,
             total_delta_btc=before.total_delta_btc,
             open_hedge_order_ids=tuple(order.hedge_order_id for order in orders),
-            working_order_delta_btc=required_hedge_delta,
+            working_order_delta_btc=submitted_hedge_delta,
         )
 
         batch_events: list[Event] = []
@@ -584,6 +606,8 @@ class DemoTradingService:
             batch_id=batch_id,
             demo_target_total_delta_btc=STEP_4_DEMO_TARGET_DELTA_BTC,
             required_hedge_delta_btc=required_hedge_delta,
+            submitted_hedge_delta_btc=submitted_hedge_delta,
+            projected_total_delta_btc=projected_total_delta,
             orders=tuple(orders),
             desk_state_before=before,
             desk_state_after=self.desk_state,

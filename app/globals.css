@@ -143,6 +143,8 @@ button:disabled { opacity: .45; cursor: not-allowed !important; }
 .allocation-controls input:focus, .allocation-controls select:focus { border-color: var(--accent); }
 .allocation-controls.disabled { opacity: .48; }
 .allocation-controls.locked input { color: var(--muted-strong); background: #091720; }
+.allocation-limit { display: block; min-height: 11px; margin-top: 4px; color: var(--muted); font: 650 7px var(--font-geist-mono), monospace; letter-spacing: .03em; }
+.allocation-warning { margin: 6px 1px 0; color: var(--negative); font: 700 8px var(--font-geist-mono), monospace; letter-spacing: .04em; }
 .allocation-summary { margin-top: 9px; padding: 8px 10px; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; color: var(--muted-strong); background: #07131c; border: 1px solid var(--border); font: 9px var(--font-geist-mono), monospace; }
 .allocation-summary strong { color: var(--positive); }
 .demo-policy-note { margin: 8px 1px 0; color: var(--muted); font-size: 8px; line-height: 1.45; }

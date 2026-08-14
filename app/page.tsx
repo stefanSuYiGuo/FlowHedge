@@ -46,6 +46,7 @@ export default function Home() {
   const [hedgeOrders, setHedgeOrders] = useState<HedgeOrder[]>([]);
   const [hedgeFills, setHedgeFills] = useState<HedgeFill[]>([]);
   const [spotAllocation, setSpotAllocation] = useState("0.10");
+  const [perpAllocation, setPerpAllocation] = useState("0.00");
   const [busy, setBusy] = useState(false);
   const [apiState, setApiState] = useState<"connecting" | "online" | "offline">(
     "connecting",
@@ -64,10 +65,22 @@ export default function Home() {
     setPendingRfqs(workspace.client_flow.pending_rfqs);
     setCompletedFlowCount(workspace.client_flow.completed_count);
     setFlowActive(workspace.client_flow.active);
-    const currentSpotOrder = workspace.hedge_orders.find(
-      (order) => order.instrument_type === "SPOT" && order.status !== "FILLED",
+    const currentOrder = workspace.hedge_orders.find(
+      (order) => order.status !== "FILLED",
     );
-    if (currentSpotOrder) setSpotAllocation(currentSpotOrder.quantity_btc);
+    if (currentOrder) {
+      const currentBatch = workspace.hedge_orders.filter(
+        (order) => order.batch_id === currentOrder.batch_id,
+      );
+      const currentSpotQuantity = currentBatch
+        .filter((order) => order.instrument_type === "SPOT")
+        .reduce((sum, order) => sum + Number(order.quantity_btc), 0);
+      const currentPerpQuantity = currentBatch
+        .filter((order) => order.instrument_type === "PERPETUAL")
+        .reduce((sum, order) => sum + Number(order.quantity_btc), 0);
+      setSpotAllocation(currentSpotQuantity.toFixed(2));
+      setPerpAllocation(currentPerpQuantity.toFixed(2));
+    }
   }, []);
 
   useEffect(() => {
@@ -143,27 +156,57 @@ export default function Home() {
     deltaMarkPrice === null ? null : totalDelta * deltaMarkPrice;
   const activeHedgeOrders = hedgeOrders.filter((order) => order.status !== "FILLED");
   const hedgeOrdersCreated = activeHedgeOrders.length > 0;
+  const activeBatchId = activeHedgeOrders[0]?.batch_id ?? null;
+  const activeBatchOrders = activeBatchId === null
+    ? []
+    : hedgeOrders.filter((order) => order.batch_id === activeBatchId);
   const demoHedgeQuantity = hedgeOrdersCreated
-    ? activeHedgeOrders.reduce((sum, order) => sum + Number(order.quantity_btc), 0)
+    ? activeBatchOrders.reduce((sum, order) => sum + Number(order.quantity_btc), 0)
     : Math.abs(totalDelta);
   const hasValidSpotPrecision = /^\d+(?:\.\d{0,2})?$/.test(spotAllocation);
+  const hasValidPerpPrecision = /^\d+(?:\.\d{0,2})?$/.test(perpAllocation);
   const spotAllocationNumber = hasValidSpotPrecision
     ? Number(spotAllocation)
     : Number.NaN;
-  const perpAllocation = Number.isFinite(spotAllocationNumber)
-    ? Math.round((demoHedgeQuantity - spotAllocationNumber) * 100) / 100
+  const perpAllocationNumber = hasValidPerpPrecision
+    ? Number(perpAllocation)
     : Number.NaN;
+  const spotQuantityIsValid =
+    Number.isFinite(spotAllocationNumber) && spotAllocationNumber >= 0;
+  const perpQuantityIsValid =
+    Number.isFinite(perpAllocationNumber) && perpAllocationNumber >= 0;
+  const submittedHedgeQuantity = spotQuantityIsValid && perpQuantityIsValid
+    ? roundBtc(spotAllocationNumber + perpAllocationNumber)
+    : Number.NaN;
+  const overHedgeQuantity = Number.isFinite(submittedHedgeQuantity)
+    ? roundBtc(Math.max(0, submittedHedgeQuantity - demoHedgeQuantity))
+    : 0;
   const validAllocation =
-    Number.isFinite(spotAllocationNumber) &&
-    spotAllocationNumber >= 0 &&
-    spotAllocationNumber <= demoHedgeQuantity;
+    spotQuantityIsValid &&
+    perpQuantityIsValid &&
+    submittedHedgeQuantity > 0 &&
+    submittedHedgeQuantity <= demoHedgeQuantity;
+  const maximumSpotQuantity = roundBtc(Math.max(
+    0,
+    demoHedgeQuantity - (perpQuantityIsValid ? perpAllocationNumber : 0),
+  ));
+  const maximumPerpQuantity = roundBtc(Math.max(
+    0,
+    demoHedgeQuantity - (spotQuantityIsValid ? spotAllocationNumber : 0),
+  ));
   const requiredHedgeDelta = hedgeOrdersCreated
     ? activeHedgeOrders.reduce(
         (sum, order) => sum + signedHedgeOrderQuantity(order),
         0,
       )
     : -totalDelta;
-  const hedgeOutcomeDelta = totalDelta + requiredHedgeDelta;
+  const draftHedgeDirection = requiredHedgeDelta >= 0 ? 1 : -1;
+  const submittedHedgeDelta = Number.isFinite(submittedHedgeQuantity)
+    ? draftHedgeDirection * submittedHedgeQuantity
+    : 0;
+  const hedgeOutcomeDelta = totalDelta + (
+    hedgeOrdersCreated ? requiredHedgeDelta : submittedHedgeDelta
+  );
   const spotHedgeSide = requiredHedgeDelta >= 0 ? "BUY" : "SELL";
   const spotReferencePrice = liveBook
     ? Number(spotHedgeSide === "BUY" ? liveBook.best_ask : liveBook.best_bid)
@@ -223,6 +266,7 @@ export default function Home() {
       setHedgeOrders([]);
       setHedgeFills([]);
       setSpotAllocation("0.10");
+      setPerpAllocation("0.00");
       setApiState("online");
     } catch {
       setApiState("offline");
@@ -247,6 +291,7 @@ export default function Home() {
     try {
       await createManualHedgeOrders(
         spotAllocation,
+        perpAllocation,
         `manual-hedge-v${deskState.version}-${Date.now()}`,
       );
       await refreshHedgeState();
@@ -573,7 +618,7 @@ export default function Home() {
               <div className="hedge-workspace">
                 <div className="recommendation-grid">
                   <div>
-                    <small>{hedgeOrdersCreated ? "CURRENT ORDERS PROJECT TO" : "EXPLICIT DEMO TARGET"}</small>
+                    <small>{hedgeOrdersCreated ? "CURRENT ORDERS PROJECT TO" : "DRAFT PROJECTED DELTA"}</small>
                     <strong>{formatBtc(hedgeOutcomeDelta)}</strong>
                   </div>
                   <div>
@@ -594,16 +639,17 @@ export default function Home() {
                   <label>
                     <span>SPOT HEDGE · BTC · MAX 2 DECIMALS</span>
                     <input
+                      aria-describedby="spot-allocation-limit"
                       aria-label="Spot hedge quantity in BTC"
                       disabled={busy || hedgeOrdersCreated}
                       inputMode="decimal"
                       min="0"
-                      max={demoHedgeQuantity}
+                      max={maximumSpotQuantity}
                       step="0.01"
                       type="number"
                       value={spotAllocation}
                       onBlur={() => {
-                        if (validAllocation) {
+                        if (spotQuantityIsValid) {
                           setSpotAllocation(spotAllocationNumber.toFixed(2));
                         }
                       }}
@@ -614,30 +660,58 @@ export default function Home() {
                         }
                       }}
                     />
+                    <small className="allocation-limit" id="spot-allocation-limit">
+                      MAX {maximumSpotQuantity.toFixed(2)} BTC WITH CURRENT PERP
+                    </small>
                   </label>
                   <label>
-                    <span>PERP REMAINDER · BTC</span>
+                    <span>PERP HEDGE · BTC · MAX 2 DECIMALS</span>
                     <input
-                      aria-label="Calculated perpetual hedge quantity in BTC"
-                      readOnly
-                      value={validAllocation ? perpAllocation.toFixed(2) : "INVALID"}
+                      aria-describedby="perp-allocation-limit"
+                      aria-label="Perpetual hedge quantity in BTC"
+                      disabled={busy || hedgeOrdersCreated}
+                      inputMode="decimal"
+                      min="0"
+                      max={maximumPerpQuantity}
+                      step="0.01"
+                      type="number"
+                      value={perpAllocation}
+                      onBlur={() => {
+                        if (perpQuantityIsValid) {
+                          setPerpAllocation(perpAllocationNumber.toFixed(2));
+                        }
+                      }}
+                      onChange={(event) => {
+                        const nextValue = event.target.value;
+                        if (nextValue === "" || /^\d*(?:\.\d{0,2})?$/.test(nextValue)) {
+                          setPerpAllocation(nextValue);
+                        }
+                      }}
                     />
+                    <small className="allocation-limit" id="perp-allocation-limit">
+                      MAX {maximumPerpQuantity.toFixed(2)} BTC WITH CURRENT SPOT
+                    </small>
                   </label>
                   <label>
                     <span>EXECUTION SOURCE</span>
                     <input readOnly value="FIXED STEP 4 SIMULATION" />
                   </label>
                 </div>
+                {overHedgeQuantity > 0 && (
+                  <p className="allocation-warning" role="alert">
+                    ALLOCATION EXCEEDS THE MAXIMUM BY {overHedgeQuantity.toFixed(2)} BTC
+                  </p>
+                )}
 
                 <div className="allocation-summary">
                   <span>Current exposure {formatBtc(totalDelta)}</span>
                   <span>→</span>
-                  <span>Manual hedge requires <strong>{formatBtc(requiredHedgeDelta)}</strong></span>
+                  <span>{hedgeOrdersCreated ? "Working hedge" : "Manual allocation"} <strong>{formatBtc(hedgeOrdersCreated ? requiredHedgeDelta : submittedHedgeDelta)}</strong></span>
                   <span>→</span>
                   <span>Projected <strong>{formatBtc(hedgeOutcomeDelta)}</strong></span>
                 </div>
                 <p className="demo-policy-note">
-                  Enter the editable Spot quantity; the backend calculates the exact Perp remainder. This is an explicit demo target, not a Risk Policy recommendation. New client fills remain independent and can move projected delta while these orders are still working.
+                  Enter Spot and Perp quantities independently. A partial hedge may intentionally leave residual exposure; the combined quantity cannot exceed the current exposure. This is a manual decision, not a Risk Policy or Hedge Optimizer recommendation. New client fills remain independent and can move projected delta while these orders are still working.
                 </p>
 
                 <div className={`market-candidate ${marketStatus !== "LIVE" ? "unavailable" : ""}`}>
@@ -648,9 +722,9 @@ export default function Home() {
                   {marketStatus === "LIVE" && liveBook ? (
                     <div className="market-candidate-grid">
                       <div><small>SIDE</small><strong className={spotHedgeSide === "BUY" ? "bid" : "ask"}>{spotHedgeSide}</strong></div>
-                      <div><small>MANUAL SPOT QTY</small><strong>{validAllocation ? `${spotAllocationNumber.toFixed(2)} BTC` : "INVALID"}</strong></div>
+                      <div><small>MANUAL SPOT QTY</small><strong>{spotQuantityIsValid ? `${spotAllocationNumber.toFixed(2)} BTC` : "INVALID"}</strong></div>
                       <div><small>BEST {spotHedgeSide === "BUY" ? "ASK" : "BID"} REFERENCE</small><strong>{spotReferencePrice === null ? "—" : formatUsd(spotReferencePrice)}</strong></div>
-                      <div><small>INDICATIVE NOTIONAL</small><strong>{validAllocation && spotReferencePrice !== null ? formatCompactUsd(spotAllocationNumber * spotReferencePrice) : "—"}</strong></div>
+                      <div><small>INDICATIVE NOTIONAL</small><strong>{spotQuantityIsValid && spotReferencePrice !== null ? formatCompactUsd(spotAllocationNumber * spotReferencePrice) : "—"}</strong></div>
                     </div>
                   ) : (
                     <p>
@@ -894,6 +968,10 @@ function payloadNumber(event: FlowEvent, key: string): number {
 
 function apiErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function roundBtc(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
 function formatQuantity(value: string): string {

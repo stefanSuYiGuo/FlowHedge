@@ -207,7 +207,9 @@ def test_background_schedule_generates_automatically_and_pause_stops_arrivals(
 def test_completed_hedge_batch_does_not_block_the_next_manual_batch() -> None:
     service = DemoTradingService()
     service.run_fixed_client_trade()
-    first_batch = service.create_manual_hedge_orders(Decimal("5"), "batch-one")
+    first_batch = service.create_manual_hedge_orders(
+        Decimal("5"), Decimal("0"), "batch-one"
+    )
     first_order = first_batch.orders[0]
     service.simulate_hedge_fill(
         first_order.hedge_order_id,
@@ -242,7 +244,9 @@ def test_completed_hedge_batch_does_not_block_the_next_manual_batch() -> None:
     )
     service.complete_generated_client_rfq(pending)
 
-    second_batch = service.create_manual_hedge_orders(Decimal("2.50"), "batch-two")
+    second_batch = service.create_manual_hedge_orders(
+        Decimal("2.50"), Decimal("3.50"), "batch-two"
+    )
     assert second_batch.required_hedge_delta_btc == Decimal("6")
     assert sum((order.quantity_btc for order in second_batch.orders), Decimal("0")) == Decimal("6")
     assert [order.hedge_order_id for order in service.archived_hedge_orders] == [

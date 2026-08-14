@@ -234,6 +234,8 @@ export interface HedgeOrderBatchResult {
   batch_id: string;
   demo_target_total_delta_btc: string;
   required_hedge_delta_btc: string;
+  submitted_hedge_delta_btc: string;
+  projected_total_delta_btc: string;
   orders: HedgeOrder[];
   desk_state_before: DeskState;
   desk_state_after: DeskState;

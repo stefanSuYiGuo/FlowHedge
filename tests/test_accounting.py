@@ -118,7 +118,9 @@ def test_fixed_scenario_is_auto_accepted_and_updates_position_once() -> None:
 def test_reset_clears_the_booked_scenario_and_event_ledger() -> None:
     service = DemoTradingService()
     service.run_fixed_client_trade()
-    service.create_manual_hedge_orders(Decimal("3"), "batch-to-reset")
+    service.create_manual_hedge_orders(
+        Decimal("3"), Decimal("2"), "batch-to-reset"
+    )
 
     reset_state = service.reset()
 
@@ -132,30 +134,46 @@ def test_reset_clears_the_booked_scenario_and_event_ledger() -> None:
     assert service.processed_fill_results == {}
 
 
-def test_hedge_orders_require_client_trade_and_valid_two_decimal_spot_quantity() -> None:
+def test_hedge_orders_require_client_trade_and_valid_two_decimal_quantities() -> None:
     service = DemoTradingService()
 
     with pytest.raises(DemoStateError, match="book a client trade"):
-        service.create_manual_hedge_orders(Decimal("3"), "batch-before-client-trade")
+        service.create_manual_hedge_orders(
+            Decimal("3"), Decimal("2"), "batch-before-client-trade"
+        )
 
     service.run_fixed_client_trade()
 
     with pytest.raises(HedgeAllocationError, match="cannot exceed"):
-        service.create_manual_hedge_orders(Decimal("6"), "batch-over-hedged")
+        service.create_manual_hedge_orders(
+            Decimal("3"), Decimal("2.01"), "batch-over-hedged"
+        )
     with pytest.raises(HedgeAllocationError, match="cannot be negative"):
-        service.create_manual_hedge_orders(Decimal("-1"), "batch-negative")
+        service.create_manual_hedge_orders(
+            Decimal("-1"), Decimal("0"), "batch-negative"
+        )
     with pytest.raises(HedgeAllocationError, match="at most two decimal"):
-        service.create_manual_hedge_orders(Decimal("0.001"), "batch-too-precise")
+        service.create_manual_hedge_orders(
+            Decimal("0"), Decimal("0.001"), "batch-too-precise"
+        )
+    with pytest.raises(HedgeAllocationError, match="at least one"):
+        service.create_manual_hedge_orders(
+            Decimal("0"), Decimal("0"), "batch-empty"
+        )
 
 
 def test_creating_mixed_hedge_orders_changes_working_but_not_actual_delta() -> None:
     service = DemoTradingService()
     service.run_fixed_client_trade()
 
-    result = service.create_manual_hedge_orders(Decimal("3"), "batch-mixed")
+    result = service.create_manual_hedge_orders(
+        Decimal("3"), Decimal("2"), "batch-mixed"
+    )
 
     assert result.replayed is False
     assert result.required_hedge_delta_btc == Decimal("5")
+    assert result.submitted_hedge_delta_btc == Decimal("5")
+    assert result.projected_total_delta_btc == Decimal("0")
     assert result.demo_target_total_delta_btc == Decimal("0")
     assert result.desk_state_before.version == 1
     assert result.desk_state_after.version == 2
@@ -179,7 +197,9 @@ def test_creating_mixed_hedge_orders_changes_working_but_not_actual_delta() -> N
         EventType.POSITION_UPDATED,
     ]
 
-    replay = service.create_manual_hedge_orders(Decimal("3"), "batch-mixed")
+    replay = service.create_manual_hedge_orders(
+        Decimal("3"), Decimal("2"), "batch-mixed"
+    )
     assert replay.replayed is True
     assert service.desk_state.version == 2
     assert len(service.events) == 9
@@ -188,7 +208,9 @@ def test_creating_mixed_hedge_orders_changes_working_but_not_actual_delta() -> N
 def test_mixed_partial_and_remaining_fills_reconcile_positions() -> None:
     service = DemoTradingService()
     service.run_fixed_client_trade()
-    batch = service.create_manual_hedge_orders(Decimal("3"), "batch-mixed-fills")
+    batch = service.create_manual_hedge_orders(
+        Decimal("3"), Decimal("2"), "batch-mixed-fills"
+    )
     spot_order, perp_order = batch.orders
 
     first_spot = service.simulate_hedge_fill(
@@ -232,21 +254,24 @@ def test_mixed_partial_and_remaining_fills_reconcile_positions() -> None:
 
 
 @pytest.mark.parametrize(
-    ("spot_quantity", "expected_spot", "expected_derivative"),
+    ("spot_quantity", "perp_quantity", "expected_spot", "expected_derivative"),
     [
-        ("5", "0", "0"),
-        ("0", "-5", "5"),
+        ("5", "0", "0", "0"),
+        ("0", "5", "-5", "5"),
     ],
 )
 def test_full_spot_and_full_perp_allocations_neutralize_delta(
     spot_quantity: str,
+    perp_quantity: str,
     expected_spot: str,
     expected_derivative: str,
 ) -> None:
     service = DemoTradingService()
     service.run_fixed_client_trade()
     batch = service.create_manual_hedge_orders(
-        Decimal(spot_quantity), f"batch-{spot_quantity}"
+        Decimal(spot_quantity),
+        Decimal(perp_quantity),
+        f"batch-{spot_quantity}-{perp_quantity}",
     )
     order = batch.orders[0]
 
@@ -265,7 +290,7 @@ def test_fill_is_idempotent_and_overfill_is_rejected_without_mutation() -> None:
     service = DemoTradingService()
     service.run_fixed_client_trade()
     order = service.create_manual_hedge_orders(
-        Decimal("5"), "batch-idempotent"
+        Decimal("5"), Decimal("0"), "batch-idempotent"
     ).orders[0]
 
     first = service.simulate_hedge_fill(
@@ -294,11 +319,13 @@ def test_fill_is_idempotent_and_overfill_is_rejected_without_mutation() -> None:
         )
 
 
-def test_fractional_spot_quantity_calculates_exact_perp_remainder() -> None:
+def test_fractional_spot_and_perp_quantities_are_preserved() -> None:
     service = DemoTradingService()
     service.run_fixed_client_trade()
 
-    batch = service.create_manual_hedge_orders(Decimal("0.10"), "batch-fractional")
+    batch = service.create_manual_hedge_orders(
+        Decimal("0.10"), Decimal("4.90"), "batch-fractional"
+    )
     spot_order, perp_order = batch.orders
 
     assert spot_order.quantity_btc == Decimal("0.10")
@@ -310,7 +337,7 @@ def test_unfilled_hedge_orders_can_be_cancelled_and_revised() -> None:
     service = DemoTradingService()
     service.run_fixed_client_trade()
     first_batch = service.create_manual_hedge_orders(
-        Decimal("0.10"), "batch-revise"
+        Decimal("0.10"), Decimal("4.90"), "batch-revise"
     )
 
     cancellation = service.cancel_unfilled_hedge_orders()
@@ -327,7 +354,9 @@ def test_unfilled_hedge_orders_can_be_cancelled_and_revised() -> None:
         EventType.POSITION_UPDATED,
     ]
 
-    revised = service.create_manual_hedge_orders(Decimal("1.25"), "batch-revise")
+    revised = service.create_manual_hedge_orders(
+        Decimal("1.25"), Decimal("3.75"), "batch-revise"
+    )
     assert revised.orders[0].quantity_btc == Decimal("1.25")
     assert revised.orders[1].quantity_btc == Decimal("3.75")
     assert set(cancellation.cancelled_hedge_order_ids).isdisjoint(
@@ -339,7 +368,7 @@ def test_hedge_orders_with_fills_cannot_be_cancelled_for_revision() -> None:
     service = DemoTradingService()
     service.run_fixed_client_trade()
     order = service.create_manual_hedge_orders(
-        Decimal("0.10"), "batch-no-revise-after-fill"
+        Decimal("0.10"), Decimal("4.90"), "batch-no-revise-after-fill"
     ).orders[0]
     service.simulate_hedge_fill(
         order.hedge_order_id, Decimal("0.05"), "fill-before-revise"
@@ -347,3 +376,23 @@ def test_hedge_orders_with_fills_cannot_be_cancelled_for_revision() -> None:
 
     with pytest.raises(DemoStateError, match="with fills cannot be revised"):
         service.cancel_unfilled_hedge_orders()
+
+
+def test_partial_manual_allocation_leaves_residual_projected_exposure() -> None:
+    service = DemoTradingService()
+    service.run_fixed_client_trade()
+
+    batch = service.create_manual_hedge_orders(
+        Decimal("1.25"), Decimal("2.50"), "batch-partial"
+    )
+
+    assert batch.required_hedge_delta_btc == Decimal("5")
+    assert batch.submitted_hedge_delta_btc == Decimal("3.75")
+    assert batch.projected_total_delta_btc == Decimal("-1.25")
+    assert batch.desk_state_after.total_delta_btc == Decimal("-5")
+    assert batch.desk_state_after.working_order_delta_btc == Decimal("3.75")
+    assert (
+        batch.desk_state_after.total_delta_btc
+        + batch.desk_state_after.working_order_delta_btc
+        == Decimal("-1.25")
+    )

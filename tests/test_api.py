@@ -31,6 +31,7 @@ def test_step_4_api_order_and_fill_lifecycle() -> None:
                 ManualHedgeOrderRequest(
                     batch_id="api-step4",
                     spot_quantity_btc="3",
+                    perp_quantity_btc="2",
                 )
             )
         )
@@ -45,21 +46,37 @@ def test_step_4_api_order_and_fill_lifecycle() -> None:
                 ManualHedgeOrderRequest(
                     batch_id="api-too-precise",
                     spot_quantity_btc="0.001",
+                    perp_quantity_btc="0",
                 )
             )
         )
     assert too_precise.value.status_code == 422
+
+    with pytest.raises(HTTPException) as over_hedged:
+        run(
+            create_manual_hedge_orders(
+                ManualHedgeOrderRequest(
+                    batch_id="api-over-hedged",
+                    spot_quantity_btc="3",
+                    perp_quantity_btc="2.01",
+                )
+            )
+        )
+    assert over_hedged.value.status_code == 422
 
     order_batch = run(
         create_manual_hedge_orders(
             ManualHedgeOrderRequest(
                 batch_id="api-step4",
                 spot_quantity_btc="0.10",
+                perp_quantity_btc="4.90",
             )
         )
     )
     assert order_batch.desk_state_after.total_delta_btc == -5
     assert order_batch.desk_state_after.working_order_delta_btc == 5
+    assert order_batch.submitted_hedge_delta_btc == 5
+    assert order_batch.projected_total_delta_btc == 0
     assert len(order_batch.orders) == 2
     assert order_batch.orders[0].quantity_btc == Decimal("0.10")
     assert order_batch.orders[1].quantity_btc == Decimal("4.90")
@@ -115,6 +132,7 @@ def test_api_can_cancel_untouched_orders_for_editing() -> None:
             ManualHedgeOrderRequest(
                 batch_id="api-revise",
                 spot_quantity_btc="0.10",
+                perp_quantity_btc="4.90",
             )
         )
     )

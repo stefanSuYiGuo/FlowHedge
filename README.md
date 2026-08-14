@@ -94,12 +94,14 @@ set `NEXT_PUBLIC_FLOWHEDGE_API_URL` before starting the frontend.
 
 ## Step 4 hedge execution demo
 
-Manual mode exposes an explicit demo target of `0 BTC`. Enter an editable Spot
-quantity with at most two decimal places; the backend calculates the exact Perp
-remainder required for the desk's current accumulated exposure.
+Manual mode exposes an explicit reference target of `0 BTC`. Spot and Perp are
+independently editable with at most two decimal places. A trader can fully hedge
+to the reference target or submit a smaller allocation and intentionally retain
+residual exposure; the combined allocation cannot exceed the current exposure.
 
-- `POST /demo/hedge-orders` records the manual Spot/Perp instructions. Actual
-  positions do not change until fills; only working and projected delta change.
+- `POST /demo/hedge-orders` validates and records both manual Spot and Perp
+  instructions. Actual positions do not change until fills; only working and
+  projected delta change.
 - `POST /demo/hedge-orders/{order_id}/fills` records an immutable simulated
   fill. Only these fills change Spot inventory or derivative delta.
 - `POST /demo/hedge-orders/cancel` cancels an untouched hedge batch so its
@@ -112,7 +114,9 @@ remainder required for the desk's current accumulated exposure.
 - `GET /demo/hedge-orders` and `GET /demo/hedge-fills` restore the blotter after
   a page refresh. Reset clears client trades, hedge orders, fills, and events.
 
-The zero target is a labeled demo assumption, not a Risk Policy output. Manual
+The UI shows the live maximum available beside each input after accounting for
+the other input, while the API independently rejects over-hedging. The zero
+reference is a labeled demo assumption, not a Risk Policy output. Manual
 allocation is not presented as a Hedge Optimizer recommendation, and the fixed
 fill prices and fill controls are not real market execution.
 

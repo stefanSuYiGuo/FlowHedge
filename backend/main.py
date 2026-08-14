@@ -120,6 +120,7 @@ class RFQValidationResponse(BaseModel):
 class ManualHedgeOrderRequest(BaseModel):
     batch_id: str = Field(min_length=1, max_length=100)
     spot_quantity_btc: Decimal = Field(ge=0)
+    perp_quantity_btc: Decimal = Field(ge=0)
 
 
 class SimulatedHedgeFillRequest(BaseModel):
@@ -242,11 +243,12 @@ async def get_demo_scenario() -> Optional[DemoScenarioResult]:
 async def create_manual_hedge_orders(
     request: ManualHedgeOrderRequest,
 ) -> HedgeOrderBatchResult:
-    """Create a manual Spot/Perp split for the explicit Step 4 demo target."""
+    """Create a manual, possibly partial Spot/Perp hedge allocation."""
 
     try:
         return demo_service.create_manual_hedge_orders(
             request.spot_quantity_btc,
+            request.perp_quantity_btc,
             request.batch_id,
         )
     except HedgeAllocationError as error:

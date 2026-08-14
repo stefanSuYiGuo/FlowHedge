@@ -107,6 +107,7 @@ export function getMarketState(
 
 export function createManualHedgeOrders(
   spotQuantityBtc: string,
+  perpQuantityBtc: string,
   batchId: string,
 ): Promise<HedgeOrderBatchResult> {
   return request<HedgeOrderBatchResult>("/demo/hedge-orders", {
@@ -115,6 +116,7 @@ export function createManualHedgeOrders(
     body: JSON.stringify({
       batch_id: batchId,
       spot_quantity_btc: spotQuantityBtc,
+      perp_quantity_btc: perpQuantityBtc,
     }),
   });
 }
