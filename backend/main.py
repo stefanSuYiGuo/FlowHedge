@@ -41,6 +41,13 @@ from .execution_cost.models import (
     ExecutionCostRequest,
     ExecutionCostResult,
 )
+from .hedge_economics import hedge_economics_service
+from .hedge_economics.models import (
+    HedgeEconomicsCandidateRequest,
+    HedgeEconomicsComparisonRequest,
+    HedgeEconomicsComparisonResult,
+    HedgeEconomicsResult,
+)
 from .market import market_data_service, market_state_store
 from .market.models import (
     ExecutableBookView,
@@ -209,6 +216,32 @@ async def compare_immediate_execution_costs(
     """Evaluate all registered candidates; do not rank, split, or optimize them."""
 
     return await execution_cost_service.compare(request)
+
+
+@app.post(
+    "/analytics/hedge-economics/estimate",
+    response_model=HedgeEconomicsResult,
+    tags=["analytics", "hedge-economics"],
+)
+async def estimate_standalone_hedge_economics(
+    request: HedgeEconomicsCandidateRequest,
+) -> HedgeEconomicsResult:
+    """Combine Step 8A entry cost and Step 8B carry for one candidate."""
+
+    return await hedge_economics_service.estimate(request)
+
+
+@app.post(
+    "/analytics/hedge-economics/compare",
+    response_model=HedgeEconomicsComparisonResult,
+    tags=["analytics", "hedge-economics"],
+)
+async def compare_standalone_hedge_economics(
+    request: HedgeEconomicsComparisonRequest,
+) -> HedgeEconomicsComparisonResult:
+    """Return comparable candidates without ranking, splitting, or optimizing."""
+
+    return await hedge_economics_service.compare(request)
 
 
 @app.get(

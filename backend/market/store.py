@@ -391,12 +391,14 @@ class InMemoryMarketStateStore:
         async with self._lock:
             book = self._executable_books.get(key)
             instrument = self._instruments.get(key)
+            derivatives = self._derivatives.get(key)
             connection = self._connections[self._market_feeds[key]]
         return self._build_executable_view(
             key,
             connection,
             book,
             instrument,
+            derivatives,
             now=now,
         )
 
@@ -419,20 +421,54 @@ class InMemoryMarketStateStore:
                 (
                     key,
                     self._connections[self._market_feeds[key]],
-                    self._executable_books.get(key),
+                    self._books.get(key),
                     self._instruments.get(key),
+                    self._derivatives.get(key),
+                    self._executable_books.get(key),
                 )
                 for key in keys
             )
+        display_markets = tuple(
+            self._build_view(
+                key,
+                connection,
+                display_book,
+                instrument,
+                derivatives,
+                executable_book,
+                now=now,
+            )
+            for (
+                key,
+                connection,
+                display_book,
+                instrument,
+                derivatives,
+                executable_book,
+            ) in state
+        )
+        display_markets = self._add_basis(display_markets, state, now=now)
+        derivatives_by_key = {
+            (market.venue, market.symbol, market.instrument_type): market.derivatives
+            for market in display_markets
+        }
         markets = tuple(
             self._build_executable_view(
                 key,
                 connection,
-                book,
+                executable_book,
                 instrument,
+                derivatives_by_key.get(key),
                 now=now,
             )
-            for key, connection, book, instrument in state
+            for (
+                key,
+                connection,
+                _display_book,
+                instrument,
+                _derivatives,
+                executable_book,
+            ) in state
         )
         return ExecutableMarketSnapshot(
             snapshot_version=version,
@@ -456,6 +492,7 @@ class InMemoryMarketStateStore:
         connection: MarketConnectionState,
         book: ExecutableOrderBook | None,
         instrument: InstrumentRules | None,
+        derivatives: DerivativeMarketContext | None,
         *,
         now: datetime,
     ) -> ExecutableBookView:
@@ -481,6 +518,23 @@ class InMemoryMarketStateStore:
             reason = "INSTRUMENT_METADATA_UNAVAILABLE"
         else:
             reason = None
+        derivative_age_ms = (
+            max(0, int((now - derivatives.received_at).total_seconds() * 1000))
+            if derivatives is not None
+            else None
+        )
+        funding_age_ms = (
+            max(
+                0,
+                int(
+                    (now - derivatives.funding_captured_at).total_seconds()
+                    * 1000
+                ),
+            )
+            if derivatives is not None
+            and derivatives.funding_captured_at is not None
+            else None
+        )
         return ExecutableBookView(
             venue=venue,
             symbol=symbol,
@@ -488,7 +542,20 @@ class InMemoryMarketStateStore:
             connection=connection,
             book=book,
             instrument=instrument,
+            derivatives=derivatives,
             book_data_age_ms=data_age_ms,
+            derivative_data_age_ms=derivative_age_ms,
+            derivative_data_stale=(
+                derivative_age_ms > STALE_DERIVATIVE_CONTEXT_AFTER_MS
+                if derivative_age_ms is not None
+                else None
+            ),
+            funding_data_age_ms=funding_age_ms,
+            funding_data_stale=(
+                funding_age_ms > STALE_DERIVATIVE_CONTEXT_AFTER_MS
+                if funding_age_ms is not None
+                else None
+            ),
             eligible=reason is None,
             exclusion_reason=reason,
             as_of=now,

@@ -25,7 +25,6 @@ def sweep_executable_book(
     levels = book.asks if side is ExecutionSide.BUY else book.bids
     remaining = quantity_btc
     fills: list[SimulatedExecutionFill] = []
-    filled = Decimal("0")
     notional = Decimal("0")
 
     for level in levels:
@@ -38,9 +37,13 @@ def sweep_executable_book(
                 quantity_btc=fill_quantity,
             )
         )
-        filled += fill_quantity
         notional += level.price * fill_quantity
         remaining -= fill_quantity
+
+    # Derive one side of the accounting identity instead of independently
+    # accumulating both sides. High-precision BTC equivalents from inverse
+    # contracts can otherwise round in opposite directions across many levels.
+    filled = quantity_btc - remaining
 
     return BookSweepResult(
         requested_quantity_btc=quantity_btc,

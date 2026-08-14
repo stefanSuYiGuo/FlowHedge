@@ -257,7 +257,12 @@ class ExecutableBookView(BaseModel):
     connection: MarketConnectionState
     book: Optional[ExecutableOrderBook]
     instrument: Optional[InstrumentRules] = None
+    derivatives: Optional[DerivativeMarketContext] = None
     book_data_age_ms: Optional[int] = Field(default=None, ge=0)
+    derivative_data_age_ms: Optional[int] = Field(default=None, ge=0)
+    derivative_data_stale: Optional[bool] = None
+    funding_data_age_ms: Optional[int] = Field(default=None, ge=0)
+    funding_data_stale: Optional[bool] = None
     eligible: bool
     exclusion_reason: Optional[str] = None
     as_of: datetime

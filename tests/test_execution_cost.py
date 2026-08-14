@@ -237,6 +237,31 @@ def test_exact_depth_is_full_but_excess_request_is_explicitly_partial() -> None:
     assert len(partial.fills) == 3
 
 
+def test_high_precision_inverse_levels_preserve_exact_quantity_reconciliation() -> None:
+    inverse_rules = rules(
+        instrument_type=InstrumentType.PERPETUAL,
+        venue_symbol="PI_XBTUSD",
+        contract_structure=ContractStructure.INVERSE,
+    )
+    quantities = (
+        "0.0007001909611712285168682367919",
+        "0.2130946698488464598249801114",
+        "0.0007000739850916062720264755253",
+        "0.8752237096427804424081895626",
+    )
+    book = executable_book(
+        instrument=inverse_rules,
+        bids=tuple((str(99999 - index), quantity) for index, quantity in enumerate(quantities)),
+        asks=tuple((str(100001 + index), quantity) for index, quantity in enumerate(quantities)),
+    )
+
+    result = sweep_executable_book(book, ExecutionSide.BUY, Decimal("8"))
+
+    assert result.filled_quantity_btc + result.unfilled_quantity_btc == Decimal("8")
+    assert result.filled_quantity_btc == Decimal("8") - result.unfilled_quantity_btc
+    assert result.fully_executable is False
+
+
 @pytest.mark.parametrize("side", [ExecutionSide.BUY, ExecutionSide.SELL])
 def test_cost_sign_and_spread_depth_decomposition(side: ExecutionSide) -> None:
     result = estimate_execution_cost(request(side, "2.5"), snapshot())

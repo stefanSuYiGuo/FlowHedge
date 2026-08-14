@@ -4,11 +4,11 @@ FlowHedge is an institutional crypto sales-trading simulator. The current
 checkpoint contains the reviewable trading-terminal layout, a backend-driven
 institutional client-flow simulator, and an accounting chain from RFQ through
 client fill, manual Spot/Perp hedge orders, simulated fills, and desk-state
-updates. RiskPolicy v1 and the backend-only Executable Cost Engine v1 are
-active, and the public market universe contains six Spot/Perpetual candidates
-across Kraken, Coinbase, and OKX. Production pricing, derivative carry
-economics, hedge optimization, smart routing, real execution, and PnL logic
-remain deferred.
+updates. RiskPolicy v1, the backend-only Executable Cost Engine v1, and
+Derivative Hedge Economics v1 are active, and the public market universe
+contains six Spot/Perpetual candidates across Kraken, Coinbase, and OKX.
+Production pricing, hedge optimization, smart routing, real execution, and PnL
+logic remain deferred.
 
 ## Current layout
 
@@ -314,6 +314,38 @@ than inventing an institutional fee.
 Step 8A is analytical only: it cannot create hedge orders or fills, mutate desk
 state, change risk, calculate Perpetual carry/funding economics, or perform
 Step 9 optimization. The React dashboard is intentionally unchanged.
+
+## Step 8B Derivative Hedge Economics v1
+
+The backend can now combine a Step 8A result with an explicit expected holding
+horizon and the derivative context captured in the same atomic market snapshot.
+Spot carry is zero in v1. Perpetual funding is modeled only at discrete funding
+event timestamps inside the entry-exclusive, exit-inclusive holding window;
+there is no naive hourly prorating.
+
+Predicted funding is preferred when the normalized derivative context is fresh.
+Current funding is an explicitly degraded fallback. If multiple events occur,
+the latest usable estimate is held flat and labelled
+`FLAT_RATE_EXTRAPOLATION`. If an event occurs but its schedule or fresh rate is
+unavailable, carry and total economics remain unavailable rather than being
+reported as zero. Positive normalized funding means long pays short, so
+negative expected funding costs remain valid desk credits.
+
+Funding uses only Step 8A's actually executable quantity and notional. Partial
+liquidity remains visible. Entry basis and Open Interest are carried as
+timestamped context only and do not alter cost. Capital, financing, borrow,
+custody, expected basis convergence, unwind, volatility, venue credit, and OI
+penalties remain explicitly excluded rather than receiving invented values.
+
+- `POST /analytics/hedge-economics/estimate` evaluates one standalone
+  candidate.
+- `POST /analytics/hedge-economics/compare` runs Step 8A then Step 8B for every
+  registered candidate on one shared snapshot. It does not rank, allocate,
+  recommend, or optimize.
+
+Step 8B is backend-only and does not change the dashboard or trading state.
+Its normalized results are intended as inputs to the future Step 9 Hedge
+Optimizer, which is not implemented at this checkpoint.
 
 ## Validate
 
