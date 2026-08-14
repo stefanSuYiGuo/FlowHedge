@@ -10,6 +10,15 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from .advisory import (
+    AdvisoryHedgeRecommendation,
+    AdvisoryWorkspaceState,
+    advisory_hedge_service,
+)
+from .advisory.service import (
+    AdvisoryPlanExecutionError,
+    AdvisoryPlanStateError,
+)
 from .client_flow import client_flow_service
 from .demo import (
     DemoStateError,
@@ -57,7 +66,7 @@ from .market.models import (
     UnifiedMarketSnapshot,
 )
 from .risk import risk_service
-from .risk.models import RiskAssessment, RiskAwareDemoWorkspaceState
+from .risk.models import RiskAssessment
 
 
 @asynccontextmanager
@@ -317,17 +326,19 @@ async def run_fixed_client_trade() -> DemoScenarioResult:
 
 @app.get(
     "/demo/workspace",
-    response_model=RiskAwareDemoWorkspaceState,
+    response_model=AdvisoryWorkspaceState,
     tags=["demo", "client-flow"],
 )
-async def get_demo_workspace() -> RiskAwareDemoWorkspaceState:
+async def get_demo_workspace() -> AdvisoryWorkspaceState:
     """Return one coherent view for the continuously updating trading screen."""
 
     assessment = await risk_service.assess()
-    return RiskAwareDemoWorkspaceState(
+    recommendation = await advisory_hedge_service.recommendation(assessment)
+    return AdvisoryWorkspaceState(
         client_flow=client_flow_service.state(),
         desk_state=demo_service.desk_state,
         risk_assessment=assessment,
+        advisory_recommendation=recommendation,
         hedge_orders=tuple(demo_service.archived_hedge_orders)
         + tuple(demo_service.hedge_orders.values()),
         hedge_fills=tuple(demo_service.hedge_fills),
@@ -373,6 +384,7 @@ async def reset_demo() -> DeskState:
 
     client_flow_service.reset()
     risk_service.reset()
+    advisory_hedge_service.reset()
     return demo_service.desk_state
 
 
@@ -417,6 +429,38 @@ async def create_manual_hedge_orders(
     except HedgeAllocationError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except DemoStateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.post(
+    "/demo/advisory-hedge-plans/{plan_id}/accept",
+    response_model=HedgeOrderBatchResult,
+    tags=["demo", "hedging", "advisory"],
+)
+async def accept_advisory_hedge_plan(plan_id: str) -> HedgeOrderBatchResult:
+    """Convert a current trader-accepted plan to working orders, never fills."""
+
+    try:
+        return await advisory_hedge_service.accept(plan_id)
+    except AdvisoryPlanExecutionError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except (AdvisoryPlanStateError, DemoStateError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.post(
+    "/demo/advisory-hedge-plans/{plan_id}/reject",
+    response_model=AdvisoryHedgeRecommendation,
+    tags=["demo", "hedging", "advisory"],
+)
+async def reject_advisory_hedge_plan(
+    plan_id: str,
+) -> AdvisoryHedgeRecommendation:
+    """Record Manual Override without changing optimizer logic or desk state."""
+
+    try:
+        return await advisory_hedge_service.reject(plan_id)
+    except AdvisoryPlanStateError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
 

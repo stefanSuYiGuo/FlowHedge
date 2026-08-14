@@ -3,16 +3,19 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  acceptAdvisoryHedgePlan,
   cancelUnfilledHedgeOrders,
   createManualHedgeOrders,
   getDemoWorkspace,
   getUnifiedMarketSnapshot,
   pauseClientFlow,
   resetDemo,
+  rejectAdvisoryHedgePlan,
   resumeClientFlow,
   simulateHedgeFill,
 } from "./lib/api";
 import type {
+  AdvisoryHedgeRecommendation,
   DemoScenarioResult,
   DemoWorkspaceState,
   DeskState,
@@ -45,6 +48,7 @@ export default function Home() {
   const [completedFlowCount, setCompletedFlowCount] = useState(0);
   const [deskState, setDeskState] = useState<DeskState>(flatDeskState);
   const [riskAssessment, setRiskAssessment] = useState<RiskAssessment | null>(null);
+  const [advisoryRecommendation, setAdvisoryRecommendation] = useState<AdvisoryHedgeRecommendation | null>(null);
   const [events, setEvents] = useState<FlowEvent[]>([]);
   const [hedgeOrders, setHedgeOrders] = useState<HedgeOrder[]>([]);
   const [hedgeFills, setHedgeFills] = useState<HedgeFill[]>([]);
@@ -62,10 +66,12 @@ export default function Home() {
     "KRAKEN:SPOT:BTC-USD",
   );
   const [marketPollFailed, setMarketPollFailed] = useState(false);
+  const [manualOverrideOpen, setManualOverrideOpen] = useState(false);
 
   const applyWorkspace = useCallback((workspace: DemoWorkspaceState) => {
     setDeskState(workspace.desk_state);
     setRiskAssessment(workspace.risk_assessment);
+    setAdvisoryRecommendation(workspace.advisory_recommendation);
     setEvents(workspace.events);
     setHedgeOrders(workspace.hedge_orders);
     setHedgeFills(workspace.hedge_fills);
@@ -279,6 +285,7 @@ export default function Home() {
       const resetState = await resetDemo();
       setDeskState(resetState);
       setRiskAssessment(null);
+      setAdvisoryRecommendation(null);
       setCompletedScenarios([]);
       setPendingRfqs([]);
       setCompletedFlowCount(0);
@@ -287,6 +294,7 @@ export default function Home() {
       setHedgeFills([]);
       setSpotAllocation("");
       setPerpAllocation("");
+      setManualOverrideOpen(false);
       setApiState("online");
     } catch {
       setApiState("offline");
@@ -323,6 +331,58 @@ export default function Home() {
       );
     } catch (caught) {
       setError(apiErrorMessage(caught, "The manual hedge allocation could not be created."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleUseSystemPlan() {
+    const plan = advisoryRecommendation?.plan;
+    if (
+      busy ||
+      !plan ||
+      !advisoryRecommendation.can_use_system_plan
+    ) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+
+    try {
+      const batch = await acceptAdvisoryHedgePlan(plan.plan_id);
+      await refreshHedgeState();
+      setManualOverrideOpen(false);
+      setApiState("online");
+      setNotice(
+        batch.replayed
+          ? "System plan was already accepted — no duplicate orders were created."
+          : "System plan accepted — simulated hedge orders are working; no fills were created.",
+      );
+    } catch (caught) {
+      await refreshHedgeState().catch(() => undefined);
+      setError(apiErrorMessage(caught, "The system plan could not be accepted."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleManualOverride() {
+    if (busy) return;
+    const plan = advisoryRecommendation?.plan;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+
+    try {
+      if (plan && advisoryRecommendation?.lifecycle_status !== "REJECTED") {
+        await rejectAdvisoryHedgePlan(plan.plan_id);
+        await refreshHedgeState();
+      }
+      setManualOverrideOpen(true);
+      setApiState("online");
+      setNotice("Manual Override selected — enter an independent Spot/Perp allocation.");
+    } catch (caught) {
+      await refreshHedgeState().catch(() => undefined);
+      setError(apiErrorMessage(caught, "Manual Override could not be activated."));
     } finally {
       setBusy(false);
     }
@@ -387,7 +447,7 @@ export default function Home() {
         if (remainingQuantity <= 0) continue;
         await simulateHedgeFill(
           order.hedge_order_id,
-          remainingQuantity,
+          order.remaining_quantity_btc,
           `${order.hedge_order_id}-remainder`,
         );
       }
@@ -706,7 +766,7 @@ export default function Home() {
 
           <Panel
             title="Hedge Decision Workspace · Simulated Execution"
-            meta={mode === "manual" ? "MANUAL MODE · STEP 7" : "AUTO RISK CONTROL · NO OPTIMIZER"}
+            meta={mode === "manual" ? "SYSTEM-ASSISTED · TRADER-CONTROLLED · STEP 9.3" : "AUTO RISK CONTROL · STEP 9.4 DEFERRED"}
             grow
           >
             {!scenario ? (
@@ -724,8 +784,8 @@ export default function Home() {
                   <div><small>ADVISORY REMAINING</small><strong>{remainingRiskHedge === null ? "—" : formatBtc(remainingRiskHedge)}</strong></div>
                 </div>
                 <UnavailableFeature
-                  title="RiskPolicy is active; automatic execution is not"
-                  detail="RiskPolicy decides how much exposure should be removed and can raise AUTO_HEDGE_REQUIRED after a persistent RED breach. Step 7 deliberately creates no hedge plan or order because the Hedge Optimizer is not implemented yet."
+                  title="Advisory optimization is active; automatic execution is not"
+                  detail="Step 9.3 generates real advisory HedgePlans, but every plan remains trader-controlled. Hard-limit automatic optimization and execution begin only in Step 9.4."
                   compact
                 />
               </div>
@@ -737,6 +797,19 @@ export default function Home() {
                   <div><small>ADVISORY GROSS</small><strong>{grossRiskHedge === null ? "—" : formatBtc(grossRiskHedge)}</strong></div>
                   <div><small>ADVISORY REMAINING</small><strong>{remainingRiskHedge === null ? "—" : formatBtc(remainingRiskHedge)}</strong></div>
                 </div>
+                <SystemRecommendation
+                  busy={busy}
+                  onManualOverride={handleManualOverride}
+                  onUseSystemPlan={handleUseSystemPlan}
+                  recommendation={advisoryRecommendation}
+                  riskAssessment={riskAssessment}
+                />
+                {(manualOverrideOpen || advisoryRecommendation?.lifecycle_status === "REJECTED") && (
+                  <div className="manual-override-workflow">
+                    <div className="manual-override-heading">
+                      <strong>MANUAL OVERRIDE</strong>
+                      <span>Independent trader allocation · optimizer output unchanged</span>
+                    </div>
                 <div className="recommendation-grid">
                   <div>
                     <small>{hedgeOrdersCreated ? "CURRENT ORDERS PROJECT TO" : "DRAFT PROJECTED DELTA"}</small>
@@ -876,6 +949,8 @@ export default function Home() {
                     CANCEL &amp; EDIT ALLOCATION
                   </button>
                 </div>
+                  </div>
+                )}
 
                 <div className="simulation-controls">
                   <div className="simulation-controls-heading">
@@ -1011,11 +1086,177 @@ export default function Home() {
       </section>
 
       <footer className="terminal-footer">
-        <span>LIVE MARKET: KRAKEN + COINBASE + OKX SPOT/PERP · RISK POLICY V1 · SIMULATED HEDGE EXECUTION</span>
-        <span>{flowActive ? "FLOW ACTIVE" : "FLOW PAUSED"} · {mode === "manual" ? "MANUAL HEDGE" : "AUTO CONTROL · OPTIMIZER DEFERRED"}</span>
+        <span>LIVE MARKET: KRAKEN + COINBASE + OKX SPOT/PERP · RISK POLICY V1.1 · HEDGE OPTIMIZER V1</span>
+        <span>{flowActive ? "FLOW ACTIVE" : "FLOW PAUSED"} · {mode === "manual" ? "ADVISORY · TRADER CONTROLLED" : "AUTO CONTROL · STEP 9.4 DEFERRED"}</span>
       </footer>
     </main>
   );
+}
+
+function SystemRecommendation({
+  recommendation,
+  riskAssessment,
+  busy,
+  onUseSystemPlan,
+  onManualOverride,
+}: {
+  recommendation: AdvisoryHedgeRecommendation | null;
+  riskAssessment: RiskAssessment | null;
+  busy: boolean;
+  onUseSystemPlan: () => void;
+  onManualOverride: () => void;
+}) {
+  if (!recommendation) {
+    return (
+      <section className="system-recommendation unavailable">
+        <div className="system-recommendation-heading">
+          <div><span>SYSTEM RECOMMENDATION</span><strong>OPTIMIZER LOADING</strong></div>
+          <span className="plan-status">WAITING</span>
+        </div>
+      </section>
+    );
+  }
+
+  const plan = recommendation.plan;
+  const statusLabel = recommendation.lifecycle_status.replaceAll("_", " ");
+  const noPlanCopy = recommendation.lifecycle_status === "AUTO_HANDOFF_PENDING"
+    ? "AUTO_HEDGE_REQUIRED has ended the advisory window. Step 9.4 automatic execution is intentionally not active."
+    : recommendation.lifecycle_status === "NOT_REQUIRED"
+      ? "RiskPolicy has no non-zero advisory hedge requirement for the current desk state."
+      : "No executable optimizer allocation is available for the current desk and market state.";
+
+  return (
+    <section className={`system-recommendation status-${recommendation.lifecycle_status.toLowerCase()}`}>
+      <div className="system-recommendation-heading">
+        <div>
+          <span>SYSTEM RECOMMENDATION</span>
+          <strong>
+            {riskAssessment
+              ? `${riskAssessment.risk_band} · ${riskAssessment.action.replaceAll("_", " ")}`
+              : "RISK ASSESSMENT UNAVAILABLE"}
+          </strong>
+        </div>
+        <span className="plan-status">{statusLabel}</span>
+      </div>
+
+      {!plan ? (
+        <div className="system-no-plan">
+          <strong>{statusLabel}</strong>
+          <p>{noPlanCopy}</p>
+        </div>
+      ) : (
+        <>
+          <div className="plan-summary-grid">
+            <div><small>CURRENT DELTA</small><strong>{formatBtc(Number(plan.actual_delta_btc))}</strong></div>
+            <div><small>TARGET DELTA</small><strong>{formatBtc(Number(plan.target_delta_btc))}</strong></div>
+            <div><small>RECOMMENDED HEDGE</small><strong>{formatBtc(Number(plan.allocated_hedge_delta_btc))}</strong></div>
+            <div><small>PROJECTED DELTA</small><strong>{formatBtc(Number(plan.projected_delta_btc))}</strong></div>
+          </div>
+
+          {plan.status === "PARTIALLY_FEASIBLE" && (
+            <div className="partial-feasibility" role="status">
+              <span>Requested <strong>{formatBtc(Number(plan.requested_hedge_delta_btc))}</strong></span>
+              <span>Optimized <strong>{formatBtc(Number(plan.allocated_hedge_delta_btc))}</strong></span>
+              <span>Unallocated <strong>{formatBtc(Number(plan.residual_unallocated_delta_btc))}</strong></span>
+            </div>
+          )}
+
+          {plan.legs.length > 0 ? (
+            <div className="hedge-plan-legs">
+              {plan.legs.map((leg) => (
+                <div className="hedge-plan-leg" key={leg.leg_id}>
+                  <span className="plan-leg-market">
+                    <strong>{leg.venue} {leg.instrument_type === "PERPETUAL" ? "PERP" : "SPOT"}</strong>
+                    <small>{leg.instrument_id}</small>
+                  </span>
+                  <span><small>SIDE</small><strong className={leg.side === "BUY" ? "bid" : "ask"}>{displayHedgeLegSide(leg.instrument_type, leg.side)}</strong></span>
+                  <span><small>BTC EQUIVALENT</small><strong>{formatBtc(Number(leg.quantity_btc))}</strong></span>
+                  <span><small>EXPECTED VWAP</small><strong>{formatUsd(Number(leg.expected_vwap))}</strong></span>
+                  <span><small>TOTAL COST</small><strong>{Number(leg.expected_total_cost_bps).toFixed(2)} bps</strong></span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="system-no-plan compact">
+              <strong>{plan.status.replaceAll("_", " ")}</strong>
+              <p>{humanizeReason(recommendation.reason_codes[0] ?? "NO_EXECUTABLE_ALLOCATION")}</p>
+            </div>
+          )}
+
+          <div className="plan-economics">
+            <span><small>EXPECTED TOTAL COST</small><strong>{plan.total_expected_cost_bps === null ? "—" : `${Number(plan.total_expected_cost_bps).toFixed(2)} bps`}</strong></span>
+            <span><small>USD COST</small><strong>{plan.total_expected_cost_usd === null ? "—" : formatSignedCompactUsd(Number(plan.total_expected_cost_usd))}</strong></span>
+            <span><small>MARKET SNAPSHOT</small><strong>v{plan.market_snapshot_version}</strong></span>
+            <span><small>HOLDING HORIZON</small><strong>{recommendation.holding_horizon_status === "CONFIGURED" ? `${recommendation.expected_holding_seconds}s` : "NOT SET · SPOT ONLY"}</strong></span>
+          </div>
+
+          <div className="why-this-hedge">
+            <strong>WHY THIS HEDGE?</strong>
+            {optimizerExplanationLines(recommendation).length > 0 ? (
+              <ul>
+                {optimizerExplanationLines(recommendation).map((line) => <li key={line}>{line}</li>)}
+              </ul>
+            ) : (
+              <p>No eligible allocation facts were produced.</p>
+            )}
+          </div>
+          <div className="plan-provenance">
+            <span>Generated {formatTime(plan.generated_at)}</span>
+            <span>{plan.explanation_data.allocator_method}</span>
+            <span>Desk v{plan.desk_state_version}</span>
+          </div>
+        </>
+      )}
+
+      <div className="decision-actions system-plan-actions">
+        <button
+          className="primary-action"
+          disabled={busy || !recommendation.can_use_system_plan}
+          onClick={onUseSystemPlan}
+          type="button"
+        >
+          USE SYSTEM PLAN
+        </button>
+        <button
+          className="secondary-action"
+          disabled={busy || recommendation.lifecycle_status === "AUTO_HANDOFF_PENDING"}
+          onClick={onManualOverride}
+          type="button"
+        >
+          {recommendation.lifecycle_status === "REJECTED" ? "MANUAL OVERRIDE ACTIVE" : "MANUAL OVERRIDE"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function optimizerExplanationLines(
+  recommendation: AdvisoryHedgeRecommendation,
+): string[] {
+  const plan = recommendation.plan;
+  if (!plan) return [];
+  const lines = plan.explanation_data.selection_facts.slice(0, 3).map((fact) => (
+    `${fact.venue} ${fact.instrument_type === "PERPETUAL" ? "Perp" : "Spot"} supplied ${Number(fact.quantity_btc).toFixed(2)} BTC at the lowest reachable marginal economics.`
+  ));
+  for (const fact of plan.explanation_data.excluded_candidate_facts.slice(0, 3)) {
+    lines.push(`${fact.venue} ${fact.instrument_type === "PERPETUAL" ? "Perp" : "Spot"} excluded: ${humanizeReason(fact.reason)}.`);
+  }
+  if (plan.explanation_data.residual_reason) {
+    lines.push(humanizeReason(plan.explanation_data.residual_reason));
+  }
+  return lines;
+}
+
+function humanizeReason(reason: string): string {
+  return reason.replaceAll("_", " ").toLowerCase().replace(/^./, (letter) => letter.toUpperCase());
+}
+
+function displayHedgeLegSide(
+  instrumentType: "SPOT" | "PERPETUAL",
+  side: "BUY" | "SELL",
+): string {
+  if (instrumentType === "SPOT") return side;
+  return side === "BUY" ? "LONG" : "SHORT";
 }
 
 function Panel({
@@ -1099,6 +1340,16 @@ function describeEvent(event: FlowEvent): string {
       return `Exposure exited RED · now ${String(event.payload.exit_risk_band)}`;
     case "AUTO_HEDGE_REQUIRED":
       return `Auto requirement ${formatBtc(payloadNumber(event, "auto_remaining_hedge_requirement_btc"))} toward ${formatCompactUsd(payloadNumber(event, "auto_hedge_target_notional_usd"))} · no order created`;
+    case "HEDGE_PLAN_GENERATED":
+      return `${String(event.payload.status).replaceAll("_", " ")} · ${formatBtc(payloadNumber(event, "allocated_hedge_delta_btc"))} allocated`;
+    case "HEDGE_PLAN_STALE":
+      return `Plan invalidated · ${String(event.payload.reason).replaceAll("_", " ")}`;
+    case "HEDGE_PLAN_ACCEPTED":
+      return `${payloadNumber(event, "leg_count")} optimizer leg(s) accepted by trader`;
+    case "HEDGE_PLAN_REJECTED":
+      return "Trader selected Manual Override";
+    case "HEDGE_PLAN_EXECUTION_STARTED":
+      return "Simulated working orders created · no direct fills";
     default:
       return event.aggregate_id;
   }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from .domain.accounting import (
@@ -37,6 +38,9 @@ from .domain.models import (
     RFQStatus,
 )
 from .domain.validation import validate_client_rfq_notional
+
+if TYPE_CHECKING:
+    from .hedge_optimizer.models import HedgePlan
 
 
 FIXED_REFERENCE_PRICE_USD = Decimal("118000")
@@ -91,6 +95,7 @@ class DemoTradingService:
         self.saved_result: DemoScenarioResult | None = None
         self.fixed_result: DemoScenarioResult | None = None
         self.saved_order_batch: HedgeOrderBatchResult | None = None
+        self.system_plan_batches: dict[str, HedgeOrderBatchResult] = {}
         self.hedge_order_revision = 0
         self.client_flow_sequence = 0
         return self.desk_state
@@ -635,6 +640,147 @@ class DemoTradingService:
         )
         return self.saved_order_batch
 
+    def create_advisory_hedge_orders(
+        self,
+        plan: "HedgePlan",
+    ) -> HedgeOrderBatchResult:
+        """Convert an accepted optimizer plan to working orders, never fills."""
+
+        previous = self.system_plan_batches.get(plan.plan_id)
+        if previous is not None:
+            return previous.model_copy(update={"replayed": True})
+        if plan.mode.value != "ADVISORY":
+            raise HedgeAllocationError("only an ADVISORY HedgePlan can be trader-accepted")
+        if plan.status.value not in {
+            "FULLY_FEASIBLE",
+            "PARTIALLY_FEASIBLE",
+        } or not plan.legs:
+            raise HedgeAllocationError("the HedgePlan has no executable allocation")
+
+        before = self.desk_state.model_copy(deep=True)
+        if before.version != plan.desk_state_version:
+            raise DemoStateError("the HedgePlan was generated for an older DeskState")
+        if (
+            before.total_delta_btc != plan.actual_delta_btc
+            or before.working_order_delta_btc
+            != plan.qualifying_working_order_delta_btc
+        ):
+            raise DemoStateError("the HedgePlan no longer matches current desk exposure")
+
+        direction = Decimal("1") if plan.allocated_hedge_delta_btc > 0 else Decimal("-1")
+        created_at = utc_now()
+        self.hedge_order_revision += 1
+        revision = self.hedge_order_revision
+        created: list[HedgeOrder] = []
+        for index, leg in enumerate(plan.legs, start=1):
+            signed_leg = direction * leg.quantity_btc
+            if (signed_leg > 0) != (leg.side.value == "BUY"):
+                raise HedgeAllocationError("HedgePlan leg side does not match allocation")
+            if leg.instrument_type is InstrumentType.SPOT:
+                side = HedgeSide.BUY if leg.side.value == "BUY" else HedgeSide.SELL
+            else:
+                side = HedgeSide.LONG if leg.side.value == "BUY" else HedgeSide.SHORT
+            created.append(
+                HedgeOrder(
+                    hedge_order_id=(
+                        f"hedge-order-advisory-{revision:03}-{index:02}"
+                    ),
+                    batch_id=plan.plan_id,
+                    origin=HedgeOrderOrigin.SYSTEM_ADVISORY,
+                    venue=leg.venue.value,
+                    instrument_id=leg.instrument_id,
+                    instrument_type=leg.instrument_type,
+                    side=side,
+                    quantity_btc=leg.quantity_btc,
+                    filled_quantity_btc=Decimal("0"),
+                    remaining_quantity_btc=leg.quantity_btc,
+                    status=HedgeOrderStatus.OPEN,
+                    created_at=created_at,
+                    created_desk_state_version=before.version,
+                    source_plan_id=plan.plan_id,
+                    native_quantity=leg.native_quantity,
+                    native_quantity_unit=leg.native_quantity_unit,
+                    market_snapshot_version=leg.market_snapshot_version,
+                    expected_vwap_usd=leg.expected_vwap,
+                )
+            )
+
+        submitted = sum(
+            (signed_hedge_delta(order.side, order.quantity_btc) for order in created),
+            Decimal("0"),
+        )
+        if submitted != plan.allocated_hedge_delta_btc:
+            raise HedgeAllocationError("created orders do not reconcile with HedgePlan")
+
+        self.hedge_orders.update(
+            {order.hedge_order_id: order for order in created}
+        )
+        open_orders = tuple(
+            order
+            for order in self.hedge_orders.values()
+            if order.status is not HedgeOrderStatus.FILLED
+        )
+        self.desk_state = DeskState(
+            version=before.version + 1,
+            as_of=created_at,
+            spot_inventory_btc=before.spot_inventory_btc,
+            derivative_delta_btc=before.derivative_delta_btc,
+            total_delta_btc=before.total_delta_btc,
+            open_hedge_order_ids=tuple(
+                order.hedge_order_id for order in open_orders
+            ),
+            working_order_delta_btc=before.working_order_delta_btc + submitted,
+        )
+
+        batch_events: list[Event] = []
+        for order in created:
+            batch_events.append(
+                self._event(
+                    EventType.HEDGE_ORDER_CREATED,
+                    order.hedge_order_id,
+                    plan.plan_id,
+                    before.version,
+                    self.desk_state.version,
+                    {
+                        "instrument_type": order.instrument_type,
+                        "side": order.side,
+                        "quantity_btc": order.quantity_btc,
+                        "native_quantity": order.native_quantity,
+                        "native_quantity_unit": order.native_quantity_unit,
+                        "venue": order.venue,
+                        "origin": order.origin,
+                        "source_plan_id": plan.plan_id,
+                    },
+                )
+            )
+        batch_events.append(
+            self._position_event(
+                plan.plan_id,
+                before.version,
+                self.desk_state.version,
+                reason="ADVISORY_HEDGE_ORDERS_REGISTERED",
+            )
+        )
+        result = HedgeOrderBatchResult(
+            replayed=False,
+            batch_id=plan.plan_id,
+            demo_target_total_delta_btc=plan.target_delta_btc,
+            required_hedge_delta_btc=plan.requested_hedge_delta_btc,
+            submitted_hedge_delta_btc=submitted,
+            projected_total_delta_btc=(
+                before.total_delta_btc
+                + before.working_order_delta_btc
+                + submitted
+            ),
+            orders=tuple(created),
+            desk_state_before=before,
+            desk_state_after=self.desk_state,
+            events=tuple(batch_events),
+        )
+        self.system_plan_batches[plan.plan_id] = result
+        self.saved_order_batch = result
+        return result
+
     def cancel_unfilled_hedge_orders(self) -> HedgeCancellationResult:
         """Cancel an untouched demo hedge batch so the allocation can be revised."""
 
@@ -700,12 +846,14 @@ class DemoTradingService:
             return previous.model_copy(update={"replayed": True})
         if quantity_btc <= 0:
             raise HedgeFillError("fill quantity must be positive")
-        if quantity_btc != quantity_btc.quantize(STEP_4_QUANTITY_INCREMENT_BTC):
-            raise HedgeFillError("fill quantity supports at most two decimal places")
-
         order = self.hedge_orders.get(hedge_order_id)
         if order is None:
             raise DemoStateError(f"unknown hedge order: {hedge_order_id}")
+        if (
+            order.origin is HedgeOrderOrigin.MANUAL
+            and quantity_btc != quantity_btc.quantize(STEP_4_QUANTITY_INCREMENT_BTC)
+        ):
+            raise HedgeFillError("manual fill quantity supports at most two decimal places")
         if quantity_btc > order.remaining_quantity_btc:
             raise HedgeFillError(
                 f"fill quantity exceeds remaining quantity ({order.remaining_quantity_btc} BTC)"
@@ -837,6 +985,8 @@ class DemoTradingService:
 
     @staticmethod
     def _fixed_hedge_fill_price(order: HedgeOrder) -> Decimal:
+        if order.expected_vwap_usd is not None:
+            return order.expected_vwap_usd
         if order.instrument_type is InstrumentType.SPOT:
             return (
                 FIXED_SPOT_HEDGE_BUY_PRICE_USD

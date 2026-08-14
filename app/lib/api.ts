@@ -1,4 +1,5 @@
 import type {
+  AdvisoryHedgeRecommendation,
   ClientFlowState,
   DemoScenarioResult,
   DemoWorkspaceState,
@@ -149,6 +150,24 @@ export function createManualHedgeOrders(
   });
 }
 
+export function acceptAdvisoryHedgePlan(
+  planId: string,
+): Promise<HedgeOrderBatchResult> {
+  return request<HedgeOrderBatchResult>(
+    `/demo/advisory-hedge-plans/${encodeURIComponent(planId)}/accept`,
+    { method: "POST" },
+  );
+}
+
+export function rejectAdvisoryHedgePlan(
+  planId: string,
+): Promise<AdvisoryHedgeRecommendation> {
+  return request<AdvisoryHedgeRecommendation>(
+    `/demo/advisory-hedge-plans/${encodeURIComponent(planId)}/reject`,
+    { method: "POST" },
+  );
+}
+
 export function cancelUnfilledHedgeOrders(): Promise<HedgeCancellationResult> {
   return request<HedgeCancellationResult>("/demo/hedge-orders/cancel", {
     method: "POST",
@@ -157,7 +176,7 @@ export function cancelUnfilledHedgeOrders(): Promise<HedgeCancellationResult> {
 
 export function simulateHedgeFill(
   orderId: string,
-  quantityBtc: number,
+  quantityBtc: string | number,
   fillId: string,
 ): Promise<HedgeFillResult> {
   return request<HedgeFillResult>(`/demo/hedge-orders/${orderId}/fills`, {
@@ -165,7 +184,7 @@ export function simulateHedgeFill(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       hedge_fill_id: fillId,
-      quantity_btc: quantityBtc.toString(),
+      quantity_btc: String(quantityBtc),
     }),
   });
 }

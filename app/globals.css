@@ -164,6 +164,45 @@ button:disabled { opacity: .45; cursor: not-allowed !important; }
 .recommendation-grid strong { display: block; margin-top: 4px; font: 750 14px var(--font-geist-mono), monospace; }
 .risk-recommendation { margin-top: 0; background: #0c1921; border-left-color: var(--warning); }
 .risk-recommendation strong { font-size: 11px; }
+.system-recommendation { margin: 10px 0 13px; padding: 11px; background: #071a19; border: 1px solid #176d5d; }
+.system-recommendation.unavailable, .system-recommendation.status-no_feasible_hedge, .system-recommendation.status-blocked, .system-recommendation.status-auto_handoff_pending { background: #10181e; border-color: var(--border-strong); }
+.system-recommendation.status-partially_feasible { border-color: #705b24; }
+.system-recommendation.status-rejected { border-color: #4d5d68; }
+.system-recommendation-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.system-recommendation-heading > div > span { display: block; color: var(--accent); font-size: 8px; font-weight: 850; letter-spacing: .1em; }
+.system-recommendation-heading > div > strong { display: block; margin-top: 4px; font: 800 12px var(--font-geist-mono), monospace; }
+.plan-status { padding: 4px 6px; color: var(--accent); border: 1px solid #176d5d; font: 750 7px var(--font-geist-mono), monospace; letter-spacing: .06em; }
+.status-partially_feasible .plan-status { color: var(--warning); border-color: #705b24; }
+.status-no_feasible_hedge .plan-status, .status-blocked .plan-status, .status-auto_handoff_pending .plan-status, .status-rejected .plan-status { color: var(--muted-strong); border-color: var(--border-strong); }
+.system-no-plan { min-height: 70px; padding: 14px 10px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.system-no-plan.compact { min-height: auto; margin-top: 9px; padding: 10px; background: #07131c; border: 1px solid var(--border); }
+.system-no-plan strong { font-size: 9px; }
+.system-no-plan p { max-width: 520px; margin: 5px 0 0; color: var(--muted); font-size: 8px; line-height: 1.5; }
+.plan-summary-grid { margin-top: 10px; display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--border); }
+.plan-summary-grid > div { padding: 8px; border-right: 1px solid var(--border); }
+.plan-summary-grid > div:last-child { border-right: 0; }
+.plan-summary-grid small, .plan-economics small, .hedge-plan-leg small { display: block; color: var(--muted); font-size: 7px; letter-spacing: .05em; }
+.plan-summary-grid strong { display: block; margin-top: 4px; font: 750 11px var(--font-geist-mono), monospace; }
+.partial-feasibility { margin-top: 8px; padding: 7px 9px; display: flex; flex-wrap: wrap; gap: 12px; color: var(--warning); background: rgba(183, 143, 45, .08); border: 1px solid #705b24; font: 8px var(--font-geist-mono), monospace; }
+.hedge-plan-legs { margin-top: 9px; border: 1px solid var(--border); }
+.hedge-plan-leg { padding: 8px; display: grid; grid-template-columns: 1.2fr .55fr .85fr 1fr .7fr; align-items: center; gap: 8px; border-bottom: 1px solid var(--border); }
+.hedge-plan-leg:last-child { border-bottom: 0; }
+.hedge-plan-leg strong { display: block; margin-top: 3px; font: 700 9px var(--font-geist-mono), monospace; }
+.plan-leg-market strong { margin-top: 0; color: var(--ink); }
+.plan-leg-market small { margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-economics { margin-top: 9px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
+.plan-economics > span { padding: 7px; background: #06121a; border: 1px solid var(--border); }
+.plan-economics strong { display: block; margin-top: 4px; font: 700 9px var(--font-geist-mono), monospace; }
+.why-this-hedge { margin-top: 9px; padding: 9px; background: #07131c; border-left: 2px solid var(--accent); }
+.why-this-hedge > strong { color: var(--accent); font-size: 8px; letter-spacing: .08em; }
+.why-this-hedge ul { margin: 6px 0 0; padding-left: 15px; color: var(--muted-strong); font-size: 8px; line-height: 1.55; }
+.why-this-hedge p { margin: 6px 0 0; color: var(--muted); font-size: 8px; }
+.plan-provenance { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 10px; color: var(--muted); font: 7px var(--font-geist-mono), monospace; }
+.system-plan-actions { margin-top: 9px; }
+.manual-override-workflow { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-strong); }
+.manual-override-heading { margin-bottom: 8px; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.manual-override-heading strong { color: var(--warning); font-size: 8px; letter-spacing: .09em; }
+.manual-override-heading span { color: var(--muted); font-size: 8px; text-align: right; }
 .allocation-controls { display: grid; grid-template-columns: 1fr 1fr 1.25fr; gap: 9px; }
 .allocation-controls label > span { display: block; margin-bottom: 5px; color: var(--muted); font-size: 8px; font-weight: 750; letter-spacing: .07em; }
 .allocation-controls input, .allocation-controls select { width: 100%; height: 35px; padding: 0 9px; color: var(--ink); background: #06121a; border: 1px solid var(--border-strong); border-radius: 0; outline: none; font: 10px var(--font-geist-mono), monospace; }
@@ -269,9 +308,9 @@ button:disabled { opacity: .45; cursor: not-allowed !important; }
   .mode-controls { width: 100%; }
   .mode-controls button { flex: 1; }
   .desk-strip { grid-template-columns: repeat(2, 1fr); }
-  .quote-section, .allocation-controls, .market-candidate-grid { grid-template-columns: 1fr; }
+  .quote-section, .allocation-controls, .market-candidate-grid, .hedge-plan-leg { grid-template-columns: 1fr; }
   .quote-prices { border-right: 0; border-bottom: 1px solid var(--border); }
-  .recommendation-grid { grid-template-columns: repeat(2, 1fr); }
+  .recommendation-grid, .plan-summary-grid, .plan-economics { grid-template-columns: repeat(2, 1fr); }
   .active-rfq { align-items: flex-start; flex-direction: column; }
   .flow-controls { grid-template-columns: 1fr 1fr; }
   .flow-controls div { grid-column: 1 / -1; }

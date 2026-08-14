@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -41,6 +41,7 @@ class QuoteStatus(str, Enum):
 
 class HedgeOrderOrigin(str, Enum):
     MANUAL = "MANUAL"
+    SYSTEM_ADVISORY = "SYSTEM_ADVISORY"
 
 
 class HedgeSide(str, Enum):
@@ -71,6 +72,11 @@ class EventType(str, Enum):
     AUTO_HEDGE_ARMED = "AUTO_HEDGE_ARMED"
     AUTO_HEDGE_CANCELLED = "AUTO_HEDGE_CANCELLED"
     AUTO_HEDGE_REQUIRED = "AUTO_HEDGE_REQUIRED"
+    HEDGE_PLAN_GENERATED = "HEDGE_PLAN_GENERATED"
+    HEDGE_PLAN_STALE = "HEDGE_PLAN_STALE"
+    HEDGE_PLAN_ACCEPTED = "HEDGE_PLAN_ACCEPTED"
+    HEDGE_PLAN_REJECTED = "HEDGE_PLAN_REJECTED"
+    HEDGE_PLAN_EXECUTION_STARTED = "HEDGE_PLAN_EXECUTION_STARTED"
 
 
 class MarketObservation(BaseModel):
@@ -159,6 +165,11 @@ class HedgeOrder(BaseModel):
     status: HedgeOrderStatus
     created_at: datetime
     created_desk_state_version: int = Field(ge=0)
+    source_plan_id: Optional[str] = None
+    native_quantity: Optional[Decimal] = Field(default=None, gt=0)
+    native_quantity_unit: Optional[str] = None
+    market_snapshot_version: Optional[int] = Field(default=None, ge=0)
+    expected_vwap_usd: Optional[Decimal] = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def quantities_and_side_must_reconcile(self) -> "HedgeOrder":

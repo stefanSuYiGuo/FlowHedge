@@ -12,7 +12,7 @@ export type QuoteStatus =
   | "EXPIRED"
   | "SUPERSEDED"
   | "REJECTED";
-export type HedgeOrderOrigin = "MANUAL";
+export type HedgeOrderOrigin = "MANUAL" | "SYSTEM_ADVISORY";
 export type HedgeSide = "BUY" | "SELL" | "LONG" | "SHORT";
 export type HedgeOrderStatus = "OPEN" | "PARTIALLY_FILLED" | "FILLED";
 export type MarketConnectionStatus =
@@ -220,6 +220,11 @@ export interface HedgeOrder {
   status: HedgeOrderStatus;
   created_at: string;
   created_desk_state_version: number;
+  source_plan_id: string | null;
+  native_quantity: string | null;
+  native_quantity_unit: string | null;
+  market_snapshot_version: number | null;
+  expected_vwap_usd: string | null;
 }
 
 export interface HedgeFill {
@@ -274,9 +279,112 @@ export interface DemoWorkspaceState {
   client_flow: ClientFlowState;
   desk_state: DeskState;
   risk_assessment: RiskAssessment;
+  advisory_recommendation: AdvisoryHedgeRecommendation;
   hedge_orders: HedgeOrder[];
   hedge_fills: HedgeFill[];
   events: FlowEvent[];
+}
+
+export type HedgePlanStatus =
+  | "FULLY_FEASIBLE"
+  | "PARTIALLY_FEASIBLE"
+  | "NO_FEASIBLE_HEDGE"
+  | "OPTIMIZATION_BLOCKED"
+  | "NO_HEDGE_REQUIRED";
+
+export interface SimulatedExecutionFill {
+  price: string;
+  quantity_btc: string;
+}
+
+export interface HedgeLeg {
+  leg_id: string;
+  candidate_id: string;
+  venue: "KRAKEN" | "COINBASE" | "OKX";
+  instrument_id: string;
+  instrument_type: "SPOT" | "PERPETUAL";
+  side: "BUY" | "SELL";
+  quantity_btc: string;
+  native_quantity: string;
+  native_quantity_unit: string;
+  expected_vwap: string;
+  expected_notional_usd: string;
+  expected_immediate_cost_bps: string;
+  expected_immediate_cost_usd: string;
+  funding_applicability: "APPLIED" | "NOT_APPLICABLE";
+  expected_funding_cost_bps: string;
+  expected_funding_cost_usd: string;
+  expected_total_cost_bps: string;
+  expected_total_cost_usd: string;
+  market_snapshot_version: number;
+  expected_fills: SimulatedExecutionFill[];
+  data_quality_flags: string[];
+}
+
+export interface MarginalSelectionFact {
+  sequence: number;
+  candidate_id: string;
+  venue: "KRAKEN" | "COINBASE" | "OKX";
+  instrument_type: "SPOT" | "PERPETUAL";
+  quantity_btc: string;
+  expected_marginal_cost_usd_per_btc: string;
+  reason_code: string;
+}
+
+export interface CandidateExclusionFact {
+  candidate_id: string;
+  venue: "KRAKEN" | "COINBASE" | "OKX";
+  instrument_type: "SPOT" | "PERPETUAL";
+  reason: string;
+}
+
+export interface HedgePlan {
+  plan_id: string;
+  optimization_id: string;
+  mode: "ADVISORY" | "AUTO_RISK";
+  status: HedgePlanStatus;
+  generated_at: string;
+  desk_state_version: number;
+  risk_assessment_id: string;
+  market_snapshot_version: number;
+  actual_delta_btc: string;
+  target_delta_btc: string;
+  qualifying_working_order_delta_btc: string;
+  requested_hedge_delta_btc: string;
+  allocated_hedge_delta_btc: string;
+  residual_unallocated_delta_btc: string;
+  expected_holding_seconds: number | null;
+  legs: HedgeLeg[];
+  total_expected_cost_usd: string | null;
+  total_expected_cost_bps: string | null;
+  projected_delta_btc: string;
+  projected_delta_notional_usd: string | null;
+  fully_feasible: boolean;
+  data_quality_flags: string[];
+  explanation_data: {
+    allocator_method: string;
+    selection_facts: MarginalSelectionFact[];
+    excluded_candidate_facts: CandidateExclusionFact[];
+    residual_reason: string | null;
+  };
+}
+
+export type AdvisoryLifecycleStatus =
+  | "NOT_REQUIRED"
+  | "AVAILABLE"
+  | "PARTIALLY_FEASIBLE"
+  | "NO_FEASIBLE_HEDGE"
+  | "BLOCKED"
+  | "REJECTED"
+  | "AUTO_HANDOFF_PENDING";
+
+export interface AdvisoryHedgeRecommendation {
+  lifecycle_status: AdvisoryLifecycleStatus;
+  plan: HedgePlan | null;
+  can_use_system_plan: boolean;
+  reason_codes: string[];
+  expected_holding_seconds: number | null;
+  holding_horizon_status: "CONFIGURED" | "UNAVAILABLE_SPOT_ONLY";
 }
 
 export type RiskBand = "GREEN" | "YELLOW" | "RED" | "UNAVAILABLE";

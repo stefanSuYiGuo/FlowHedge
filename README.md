@@ -350,8 +350,48 @@ penalties remain explicitly excluded rather than receiving invented values.
   recommend, or optimize.
 
 Step 8B is backend-only and does not change the dashboard or trading state.
-Its normalized results are intended as inputs to the future Step 9 Hedge
-Optimizer, which is not implemented at this checkpoint.
+Its normalized results feed the Step 9 Hedge Optimizer.
+
+## Step 9.1–9.2 Hedge Optimizer core
+
+The backend first builds an immutable candidate set from the current advisory
+requirement and one atomic executable-market snapshot. Stale, disconnected,
+unavailable, non-executable, non-normalizable, or economically incomparable
+markets are excluded with structured reason codes. Working-order conflicts and
+overhedges block optimization before allocation.
+
+The marginal allocator then sweeps normalized L2 liquidity across eligible
+venues and Spot/Perpetual instruments. It chooses the cheapest reachable next
+slice using Step 8A immediate cost plus Step 8B carry economics, respects native
+quantity steps and minimums, and returns a deterministic `HedgePlan` with full,
+partial, blocked, or no-feasible status. The plan is analytical: Steps 9.1–9.2
+cannot create orders or fills.
+
+## Step 9.3 Advisory workflow integration
+
+RiskPolicy advisory requirements now drive the real Candidate Builder and
+Marginal Allocator in the existing Hedge Decision Workspace. YELLOW, and RED
+inside its five-second grace period, target the $1M soft boundary. The $900K
+automatic target remains isolated for Step 9.4.
+
+The existing System Recommendation area renders the plan's current/target/
+projected delta, honest feasibility, venue/instrument legs, executable VWAP,
+expected cost, residual quantity, snapshot provenance, and deterministic
+explanation facts. `USE SYSTEM PLAN` converts accepted legs to idempotent
+simulated working `HedgeOrder`s; it never creates direct fills. `MANUAL OVERRIDE`
+remains a separate trader decision path.
+
+Plans are invalidated and regenerated after material DeskState or RiskPolicy
+changes, or when market eligibility/data quality changes. Ordinary price ticks
+do not churn a recommendation. Acceptance revalidates current exposure,
+working-order guards, venue eligibility, freshness, and prior execution before
+creating orders. Existing simulated fills still own all position changes.
+
+No institutional fee tier or expected holding horizon has been supplied. The
+live default therefore excludes Perpetuals without a horizon and reports
+`NO_FEASIBLE_HEDGE` when Spot fees are also unconfigured, rather than inventing
+economics. Configured test fixtures cover fully and partially feasible plans,
+plan acceptance, idempotency, invalidation, and order/fill accounting.
 
 ## Validate
 
