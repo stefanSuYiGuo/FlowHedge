@@ -14,6 +14,7 @@ import type {
 } from "./types";
 
 const configuredBaseUrl = process.env.NEXT_PUBLIC_FLOWHEDGE_API_URL;
+const REQUEST_TIMEOUT_MS = 5_000;
 
 export const API_BASE_URL = (
   configuredBaseUrl && configuredBaseUrl.trim().length > 0
@@ -22,14 +23,31 @@ export const API_BASE_URL = (
 ).replace(/\/$/, "");
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    cache: "no-store",
-    ...init,
-    headers: {
-      Accept: "application/json",
-      ...init?.headers,
-    },
-  });
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(
+    () => controller.abort(),
+    REQUEST_TIMEOUT_MS,
+  );
+  let response: Response;
+
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      cache: "no-store",
+      ...init,
+      headers: {
+        Accept: "application/json",
+        ...init?.headers,
+      },
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`FlowHedge API request timed out after ${REQUEST_TIMEOUT_MS}ms`);
+    }
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     const body = await response.text();

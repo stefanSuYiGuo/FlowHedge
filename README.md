@@ -42,7 +42,7 @@ cd FlowHedge
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r backend/requirements.txt
-python -m uvicorn backend.main:app --reload --port 8000
+python -m uvicorn backend.main:app --port 8000
 ```
 
 Then open:
@@ -51,6 +51,12 @@ Then open:
 - Interactive API documentation: <http://localhost:8000/docs>
 
 The frontend reads demo state and actions from this API.
+
+For a stable demo, use the command above without the development reloader. If
+the page remains in `API CONNECTING`, stop any older backend with `Control-C`,
+start this command again, and confirm that `/health` returns before refreshing
+the page. Frontend requests time out after five seconds and recover
+automatically when the backend becomes available.
 
 The Kraken adapter uses public market data only. No account, API key, or real
 order permission is required.

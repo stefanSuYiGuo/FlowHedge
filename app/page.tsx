@@ -53,6 +53,7 @@ export default function Home() {
     "connecting",
   );
   const [error, setError] = useState<string | null>(null);
+  const [backendError, setBackendError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [marketSnapshot, setMarketSnapshot] = useState<UnifiedMarketSnapshot | null>(null);
   const [selectedMarketId, setSelectedMarketId] = useState(
@@ -97,10 +98,11 @@ export default function Home() {
         if (!active) return;
         applyWorkspace(workspace);
         setApiState("online");
+        setBackendError(null);
       } catch {
         if (!active) return;
         setApiState("offline");
-        setError(
+        setBackendError(
           "Backend unavailable. Start the FastAPI service on port 8000, then refresh.",
         );
       } finally {
@@ -444,7 +446,9 @@ export default function Home() {
         </div>
       </header>
 
-      {error && <div className="api-error" role="alert">{error}</div>}
+      {(backendError ?? error) && (
+        <div className="api-error" role="alert">{backendError ?? error}</div>
+      )}
       {notice && <div className="api-notice" role="status">{notice}</div>}
 
       <section className="desk-strip" aria-label="Desk summary">
