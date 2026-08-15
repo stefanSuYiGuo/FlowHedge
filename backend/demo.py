@@ -52,6 +52,10 @@ FIXED_PERP_HEDGE_LONG_PRICE_USD = Decimal("118010")
 FIXED_PERP_HEDGE_SHORT_PRICE_USD = Decimal("117990")
 STEP_4_DEMO_TARGET_DELTA_BTC = Decimal("0")
 STEP_4_QUANTITY_INCREMENT_BTC = Decimal("0.01")
+WORKING_HEDGE_ORDER_STATUSES = {
+    HedgeOrderStatus.OPEN,
+    HedgeOrderStatus.PARTIALLY_FILLED,
+}
 
 
 class DemoStateError(ValueError):
@@ -493,7 +497,7 @@ class DemoTradingService:
                 )
 
         existing_batch_is_complete = bool(self.hedge_orders) and all(
-            order.status is HedgeOrderStatus.FILLED
+            order.status not in WORKING_HEDGE_ORDER_STATUSES
             for order in self.hedge_orders.values()
         )
         if existing_batch_is_complete:
@@ -646,11 +650,55 @@ class DemoTradingService:
     ) -> HedgeOrderBatchResult:
         """Convert an accepted optimizer plan to working orders, never fills."""
 
+        return self._create_system_hedge_orders(
+            plan,
+            origin=HedgeOrderOrigin.SYSTEM_ADVISORY,
+        )
+
+    def create_auto_risk_hedge_orders(
+        self,
+        plan: "HedgePlan",
+        *,
+        intervention_id: str,
+        breach_id: str,
+    ) -> HedgeOrderBatchResult:
+        """Convert one AUTO_RISK plan to auditable working orders, never fills."""
+
+        return self._create_system_hedge_orders(
+            plan,
+            origin=HedgeOrderOrigin.AUTO_RISK,
+            intervention_id=intervention_id,
+            breach_id=breach_id,
+        )
+
+    def _create_system_hedge_orders(
+        self,
+        plan: "HedgePlan",
+        *,
+        origin: HedgeOrderOrigin,
+        intervention_id: str | None = None,
+        breach_id: str | None = None,
+    ) -> HedgeOrderBatchResult:
+        """Create system-owned working orders through one accounting path."""
+
         previous = self.system_plan_batches.get(plan.plan_id)
         if previous is not None:
             return previous.model_copy(update={"replayed": True})
-        if plan.mode.value != "ADVISORY":
-            raise HedgeAllocationError("only an ADVISORY HedgePlan can be trader-accepted")
+        expected_mode = (
+            "ADVISORY"
+            if origin is HedgeOrderOrigin.SYSTEM_ADVISORY
+            else "AUTO_RISK"
+        )
+        if plan.mode.value != expected_mode:
+            raise HedgeAllocationError(
+                f"{origin.value} orders require a {expected_mode} HedgePlan"
+            )
+        if origin is HedgeOrderOrigin.AUTO_RISK and (
+            not intervention_id or not breach_id
+        ):
+            raise HedgeAllocationError(
+                "AUTO_RISK orders require intervention and breach identifiers"
+            )
         if plan.status.value not in {
             "FULLY_FEASIBLE",
             "PARTIALLY_FEASIBLE",
@@ -671,6 +719,11 @@ class DemoTradingService:
         created_at = utc_now()
         self.hedge_order_revision += 1
         revision = self.hedge_order_revision
+        order_prefix = (
+            "advisory"
+            if origin is HedgeOrderOrigin.SYSTEM_ADVISORY
+            else "auto-risk"
+        )
         created: list[HedgeOrder] = []
         for index, leg in enumerate(plan.legs, start=1):
             signed_leg = direction * leg.quantity_btc
@@ -683,10 +736,10 @@ class DemoTradingService:
             created.append(
                 HedgeOrder(
                     hedge_order_id=(
-                        f"hedge-order-advisory-{revision:03}-{index:02}"
+                        f"hedge-order-{order_prefix}-{revision:03}-{index:02}"
                     ),
                     batch_id=plan.plan_id,
-                    origin=HedgeOrderOrigin.SYSTEM_ADVISORY,
+                    origin=origin,
                     venue=leg.venue.value,
                     instrument_id=leg.instrument_id,
                     instrument_type=leg.instrument_type,
@@ -698,6 +751,8 @@ class DemoTradingService:
                     created_at=created_at,
                     created_desk_state_version=before.version,
                     source_plan_id=plan.plan_id,
+                    source_intervention_id=intervention_id,
+                    source_breach_id=breach_id,
                     native_quantity=leg.native_quantity,
                     native_quantity_unit=leg.native_quantity_unit,
                     market_snapshot_version=leg.market_snapshot_version,
@@ -718,7 +773,7 @@ class DemoTradingService:
         open_orders = tuple(
             order
             for order in self.hedge_orders.values()
-            if order.status is not HedgeOrderStatus.FILLED
+            if order.status in WORKING_HEDGE_ORDER_STATUSES
         )
         self.desk_state = DeskState(
             version=before.version + 1,
@@ -750,15 +805,40 @@ class DemoTradingService:
                         "venue": order.venue,
                         "origin": order.origin,
                         "source_plan_id": plan.plan_id,
+                        "intervention_id": intervention_id,
+                        "breach_id": breach_id,
                     },
                 )
             )
+            if origin is HedgeOrderOrigin.AUTO_RISK:
+                batch_events.append(
+                    self._event(
+                        EventType.AUTO_HEDGE_ORDER_CREATED,
+                        order.hedge_order_id,
+                        intervention_id or plan.optimization_id,
+                        before.version,
+                        self.desk_state.version,
+                        {
+                            "intervention_id": intervention_id,
+                            "breach_id": breach_id,
+                            "plan_id": plan.plan_id,
+                            "venue": order.venue,
+                            "instrument_type": order.instrument_type,
+                            "side": order.side,
+                            "quantity_btc": order.quantity_btc,
+                        },
+                    )
+                )
         batch_events.append(
             self._position_event(
-                plan.plan_id,
+                intervention_id or plan.plan_id,
                 before.version,
                 self.desk_state.version,
-                reason="ADVISORY_HEDGE_ORDERS_REGISTERED",
+                reason=(
+                    "ADVISORY_HEDGE_ORDERS_REGISTERED"
+                    if origin is HedgeOrderOrigin.SYSTEM_ADVISORY
+                    else "AUTO_RISK_HEDGE_ORDERS_REGISTERED"
+                ),
             )
         )
         result = HedgeOrderBatchResult(
@@ -780,6 +860,87 @@ class DemoTradingService:
         self.system_plan_batches[plan.plan_id] = result
         self.saved_order_batch = result
         return result
+
+    def cancel_auto_risk_orders(
+        self,
+        intervention_id: str,
+        *,
+        reason: str,
+    ) -> HedgeCancellationResult:
+        """Cancel remaining simulated AUTO_RISK quantity without erasing audit state."""
+
+        targets = tuple(
+            order
+            for order in self.hedge_orders.values()
+            if order.origin is HedgeOrderOrigin.AUTO_RISK
+            and order.source_intervention_id == intervention_id
+            and order.status in WORKING_HEDGE_ORDER_STATUSES
+        )
+        before = self.desk_state.model_copy(deep=True)
+        if not targets:
+            return HedgeCancellationResult(
+                cancelled_hedge_order_ids=(),
+                desk_state_before=before,
+                desk_state_after=before,
+                events=(),
+            )
+
+        cancelled_at = utc_now()
+        for order in targets:
+            self.hedge_orders[order.hedge_order_id] = order.model_copy(
+                update={"status": HedgeOrderStatus.CANCELLED}
+            )
+        working_orders = tuple(
+            order
+            for order in self.hedge_orders.values()
+            if order.status in WORKING_HEDGE_ORDER_STATUSES
+        )
+        working_delta = sum(
+            (
+                signed_hedge_delta(order.side, order.remaining_quantity_btc)
+                for order in working_orders
+            ),
+            Decimal("0"),
+        )
+        self.desk_state = DeskState(
+            version=before.version + 1,
+            as_of=cancelled_at,
+            spot_inventory_btc=before.spot_inventory_btc,
+            derivative_delta_btc=before.derivative_delta_btc,
+            total_delta_btc=before.total_delta_btc,
+            open_hedge_order_ids=tuple(
+                order.hedge_order_id for order in working_orders
+            ),
+            working_order_delta_btc=working_delta,
+        )
+        cancelled_ids = tuple(order.hedge_order_id for order in targets)
+        events = (
+            self._event(
+                EventType.HEDGE_ORDERS_CANCELLED,
+                "desk-btc-auto-risk",
+                intervention_id,
+                before.version,
+                self.desk_state.version,
+                {
+                    "cancelled_hedge_order_ids": cancelled_ids,
+                    "origin": HedgeOrderOrigin.AUTO_RISK,
+                    "intervention_id": intervention_id,
+                    "reason": reason,
+                },
+            ),
+            self._position_event(
+                intervention_id,
+                before.version,
+                self.desk_state.version,
+                reason="AUTO_RISK_ORDERS_CANCELLED",
+            ),
+        )
+        return HedgeCancellationResult(
+            cancelled_hedge_order_ids=cancelled_ids,
+            desk_state_before=before,
+            desk_state_after=self.desk_state,
+            events=events,
+        )
 
     def cancel_unfilled_hedge_orders(self) -> HedgeCancellationResult:
         """Cancel an untouched demo hedge batch so the allocation can be revised."""
@@ -849,6 +1010,10 @@ class DemoTradingService:
         order = self.hedge_orders.get(hedge_order_id)
         if order is None:
             raise DemoStateError(f"unknown hedge order: {hedge_order_id}")
+        if order.status is HedgeOrderStatus.CANCELLED:
+            raise HedgeFillError("cancelled hedge orders cannot receive fills")
+        if order.status is HedgeOrderStatus.FILLED:
+            raise HedgeFillError("filled hedge orders cannot receive additional fills")
         if (
             order.origin is HedgeOrderOrigin.MANUAL
             and quantity_btc != quantity_btc.quantize(STEP_4_QUANTITY_INCREMENT_BTC)
@@ -891,7 +1056,7 @@ class DemoTradingService:
         open_orders = tuple(
             candidate
             for candidate in self.hedge_orders.values()
-            if candidate.status is not HedgeOrderStatus.FILLED
+            if candidate.status in WORKING_HEDGE_ORDER_STATUSES
         )
         working_order_delta = sum(
             (
@@ -945,6 +1110,24 @@ class DemoTradingService:
                 reason="HEDGE_FILL_APPLIED",
             ),
         )
+        if order.origin is HedgeOrderOrigin.AUTO_RISK:
+            auto_event = self._event(
+                EventType.AUTO_HEDGE_PARTIAL_FILL,
+                fill.hedge_fill_id,
+                order.source_intervention_id or order.batch_id,
+                before.version,
+                self.desk_state.version,
+                {
+                    "intervention_id": order.source_intervention_id,
+                    "breach_id": order.source_breach_id,
+                    "plan_id": order.source_plan_id,
+                    "hedge_order_id": order.hedge_order_id,
+                    "quantity_btc": fill.quantity_btc,
+                    "remaining_quantity_btc": updated_order.remaining_quantity_btc,
+                    "order_status": updated_order.status,
+                },
+            )
+            fill_events = fill_events + (auto_event,)
         result = HedgeFillResult(
             replayed=False,
             fill=fill,

@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from .auto_hedge import auto_hedge_controller
 from .advisory import (
     AdvisoryHedgeRecommendation,
     AdvisoryWorkspaceState,
@@ -76,9 +77,11 @@ async def lifespan(_: FastAPI):
     await market_data_service.start()
     await client_flow_service.start()
     await risk_service.start()
+    await auto_hedge_controller.start()
     try:
         yield
     finally:
+        await auto_hedge_controller.stop()
         await risk_service.stop()
         await client_flow_service.stop()
         await market_data_service.stop()
@@ -339,6 +342,7 @@ async def get_demo_workspace() -> AdvisoryWorkspaceState:
         desk_state=demo_service.desk_state,
         risk_assessment=assessment,
         advisory_recommendation=recommendation,
+        auto_hedge_intervention=auto_hedge_controller.view(),
         hedge_orders=tuple(demo_service.archived_hedge_orders)
         + tuple(demo_service.hedge_orders.values()),
         hedge_fills=tuple(demo_service.hedge_fills),
@@ -385,6 +389,7 @@ async def reset_demo() -> DeskState:
     client_flow_service.reset()
     risk_service.reset()
     advisory_hedge_service.reset()
+    auto_hedge_controller.reset()
     return demo_service.desk_state
 
 

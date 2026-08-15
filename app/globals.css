@@ -168,6 +168,18 @@ button:disabled { opacity: .45; cursor: not-allowed !important; }
 .system-recommendation.unavailable, .system-recommendation.status-no_feasible_hedge, .system-recommendation.status-blocked, .system-recommendation.status-auto_handoff_pending { background: #10181e; border-color: var(--border-strong); }
 .system-recommendation.status-partially_feasible { border-color: #705b24; }
 .system-recommendation.status-rejected { border-color: #4d5d68; }
+.auto-risk-control { background: #211013; border-color: #a53b45; box-shadow: inset 3px 0 0 #ef6d6d; }
+.auto-risk-control .system-recommendation-heading > div > span { color: var(--negative); }
+.auto-risk-control .plan-status { color: #ffd6d6; border-color: #a53b45; }
+.auto-risk-control.auto-status-complete { background: #071a18; border-color: #176d5d; box-shadow: inset 3px 0 0 var(--positive); }
+.auto-risk-summary { margin-top: 10px; display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid #663038; }
+.auto-risk-summary > div { padding: 8px; border-right: 1px solid #663038; }
+.auto-risk-summary > div:last-child { border-right: 0; }
+.auto-risk-summary small, .auto-execution-progress small { display: block; color: #c58f94; font-size: 7px; letter-spacing: .06em; }
+.auto-risk-summary strong, .auto-execution-progress strong { display: block; margin-top: 4px; font: 750 10px var(--font-geist-mono), monospace; }
+.auto-execution-progress { margin-top: 9px; display: grid; grid-template-columns: 1.5fr 1fr 1fr; gap: 7px; }
+.auto-execution-progress > span { padding: 8px; background: #160d12; border: 1px solid #663038; }
+.auto-risk-ownership-note { margin: 8px 0 0; color: #c58f94; font-size: 8px; line-height: 1.45; }
 .system-recommendation-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .system-recommendation-heading > div > span { display: block; color: var(--accent); font-size: 8px; font-weight: 850; letter-spacing: .1em; }
 .system-recommendation-heading > div > strong { display: block; margin-top: 4px; font: 800 12px var(--font-geist-mono), monospace; }
@@ -311,7 +323,7 @@ button:disabled { opacity: .45; cursor: not-allowed !important; }
   .desk-strip { grid-template-columns: repeat(2, 1fr); }
   .quote-section, .allocation-controls, .market-candidate-grid, .hedge-plan-leg { grid-template-columns: 1fr; }
   .quote-prices { border-right: 0; border-bottom: 1px solid var(--border); }
-  .recommendation-grid, .plan-summary-grid, .plan-economics { grid-template-columns: repeat(2, 1fr); }
+  .recommendation-grid, .plan-summary-grid, .plan-economics, .auto-risk-summary, .auto-execution-progress { grid-template-columns: repeat(2, 1fr); }
   .active-rfq { align-items: flex-start; flex-direction: column; }
   .flow-controls { grid-template-columns: 1fr 1fr; }
   .flow-controls div { grid-column: 1 / -1; }

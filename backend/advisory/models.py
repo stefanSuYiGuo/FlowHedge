@@ -8,6 +8,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
 
+from ..auto_hedge.models import AutoHedgeIntervention
 from ..domain.models import ClientFlowState, DeskState, Event, HedgeFill, HedgeOrder
 from ..hedge_optimizer.models import HedgePlan
 from ..risk.models import RiskAssessment
@@ -44,6 +45,7 @@ class AdvisoryWorkspaceState(BaseModel):
     desk_state: DeskState
     risk_assessment: RiskAssessment
     advisory_recommendation: AdvisoryHedgeRecommendation
+    auto_hedge_intervention: Optional[AutoHedgeIntervention] = None
     hedge_orders: tuple[HedgeOrder, ...]
     hedge_fills: tuple[HedgeFill, ...]
     events: tuple[Event, ...]

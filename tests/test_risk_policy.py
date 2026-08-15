@@ -154,6 +154,24 @@ def test_auto_target_ratio_is_configurable_not_hard_coded() -> None:
     assert result.auto_hedge_target_delta_btc == Decimal("8.00")
 
 
+@pytest.mark.parametrize("actual", ["51.20", "-51.20"])
+def test_auto_target_rounds_inward_to_executable_btc_quantum(actual: str) -> None:
+    policy = RiskPolicy()
+    live_price = Decimal("62966.0425")
+    result = policy.evaluate(
+        desk(actual),
+        reference(str(live_price)),
+        assessed_at=NOW,
+    )
+
+    assert result.risk_band is RiskBand.RED
+    assert result.auto_hedge_target_delta_btc is not None
+    assert result.auto_hedge_target_delta_btc.as_tuple().exponent == -8
+    assert abs(result.auto_hedge_target_delta_btc * live_price) <= Decimal("900000")
+    assert result.auto_gross_required_hedge_delta_btc is not None
+    assert result.auto_gross_required_hedge_delta_btc.as_tuple().exponent == -8
+
+
 def test_working_orders_reduce_advisory_and_auto_requirements_separately() -> None:
     result = RiskPolicy().evaluate(
         desk("-35", "5"), reference(), assessed_at=NOW

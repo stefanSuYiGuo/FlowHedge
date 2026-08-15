@@ -16,6 +16,7 @@ import {
 } from "./lib/api";
 import type {
   AdvisoryHedgeRecommendation,
+  AutoHedgeIntervention,
   DemoScenarioResult,
   DemoWorkspaceState,
   DeskState,
@@ -49,6 +50,7 @@ export default function Home() {
   const [deskState, setDeskState] = useState<DeskState>(flatDeskState);
   const [riskAssessment, setRiskAssessment] = useState<RiskAssessment | null>(null);
   const [advisoryRecommendation, setAdvisoryRecommendation] = useState<AdvisoryHedgeRecommendation | null>(null);
+  const [autoHedgeIntervention, setAutoHedgeIntervention] = useState<AutoHedgeIntervention | null>(null);
   const [events, setEvents] = useState<FlowEvent[]>([]);
   const [hedgeOrders, setHedgeOrders] = useState<HedgeOrder[]>([]);
   const [hedgeFills, setHedgeFills] = useState<HedgeFill[]>([]);
@@ -72,6 +74,7 @@ export default function Home() {
     setDeskState(workspace.desk_state);
     setRiskAssessment(workspace.risk_assessment);
     setAdvisoryRecommendation(workspace.advisory_recommendation);
+    setAutoHedgeIntervention(workspace.auto_hedge_intervention);
     setEvents(workspace.events);
     setHedgeOrders(workspace.hedge_orders);
     setHedgeFills(workspace.hedge_fills);
@@ -179,7 +182,11 @@ export default function Home() {
   const remainingRiskHedge = riskAssessment?.remaining_hedge_requirement_btc === null || !riskAssessment
     ? null
     : Number(riskAssessment.remaining_hedge_requirement_btc);
-  const activeHedgeOrders = hedgeOrders.filter((order) => order.status !== "FILLED");
+  const activeHedgeOrders = hedgeOrders.filter(isWorkingHedgeOrder);
+  const autoRiskActive = autoHedgeIntervention !== null && ![
+    "COMPLETE",
+    "CANCELLED",
+  ].includes(autoHedgeIntervention.status);
   const hedgeOrdersCreated = activeHedgeOrders.length > 0;
   const activeBatchId = activeHedgeOrders[0]?.batch_id ?? null;
   const activeBatchOrders = activeBatchId === null
@@ -237,16 +244,24 @@ export default function Home() {
     ? Number(spotHedgeSide === "BUY" ? liveBook.best_ask : liveBook.best_bid)
     : null;
   const canReviseAllocation =
-    hedgeOrdersCreated && activeHedgeOrders.every((order) => Number(order.filled_quantity_btc) === 0);
+    hedgeOrdersCreated &&
+    activeHedgeOrders.every(
+      (order) => order.origin !== "AUTO_RISK" && Number(order.filled_quantity_btc) === 0,
+    );
   const allHedgeOrdersFilled =
-    hedgeOrders.length > 0 && hedgeOrders.every((order) => order.status === "FILLED");
+    hedgeOrders.length > 0 && hedgeOrders.every((order) => ["FILLED", "CANCELLED"].includes(order.status));
   const canSimulateHalfFill = hedgeOrders.some(
     (order) =>
+      order.origin !== "AUTO_RISK" &&
+      isWorkingHedgeOrder(order) &&
       Number(order.filled_quantity_btc) === 0 &&
       Math.floor((Number(order.quantity_btc) * 100) / 2) > 0,
   );
   const canFillRemainder = hedgeOrders.some(
-    (order) => Number(order.remaining_quantity_btc) > 0,
+    (order) =>
+      order.origin !== "AUTO_RISK" &&
+      isWorkingHedgeOrder(order) &&
+      Number(order.remaining_quantity_btc) > 0,
   );
   const visibleEvents = useMemo(() => events.slice(-30), [events]);
 
@@ -286,6 +301,7 @@ export default function Home() {
       setDeskState(resetState);
       setRiskAssessment(null);
       setAdvisoryRecommendation(null);
+      setAutoHedgeIntervention(null);
       setCompletedScenarios([]);
       setPendingRfqs([]);
       setCompletedFlowCount(0);
@@ -414,6 +430,7 @@ export default function Home() {
 
     try {
       for (const order of hedgeOrders) {
+        if (order.origin === "AUTO_RISK" || !isWorkingHedgeOrder(order)) continue;
         if (Number(order.filled_quantity_btc) !== 0) continue;
         const partialQuantity =
           Math.floor((Number(order.quantity_btc) * 100) / 2) / 100;
@@ -443,6 +460,7 @@ export default function Home() {
 
     try {
       for (const order of hedgeOrders) {
+        if (order.origin === "AUTO_RISK" || !isWorkingHedgeOrder(order)) continue;
         const remainingQuantity = Number(order.remaining_quantity_btc);
         if (remainingQuantity <= 0) continue;
         await simulateHedgeFill(
@@ -515,15 +533,19 @@ export default function Home() {
         <div className="api-error" role="alert">{backendError ?? error}</div>
       )}
       {notice && <div className="api-notice" role="status">{notice}</div>}
-      {riskAssessment?.risk_band === "RED" && (
+      {(riskAssessment?.risk_band === "RED" || autoRiskActive) && (
         <div className="hard-breach-banner" role="alert">
           <strong>HARD LIMIT BREACH</strong>
           <span>
-            {riskAssessment.auto_hedge_required
-              ? "AUTO HEDGE REQUIRED · HEDGE OPTIMIZER NOT YET WIRED"
-              : `AUTO HEDGE IN ${Number(riskAssessment.hard_breach_seconds_remaining ?? "0").toFixed(1)}s`}
+            {autoRiskActive
+              ? `AUTO RISK CONTROL · ${(autoHedgeIntervention?.status ?? "STARTING").replaceAll("_", " ")}`
+              : riskAssessment?.auto_hedge_required
+                ? "AUTO HEDGE REQUIRED · TAKING EXECUTION OWNERSHIP"
+                : `AUTO HEDGE IN ${Number(riskAssessment?.hard_breach_seconds_remaining ?? "0").toFixed(1)}s`}
           </span>
-          <small>{formatCompactUsd(Number(riskAssessment.absolute_delta_exposure_usd ?? "0"))} ACTUAL EXPOSURE · DEMO DESK ASSUMPTIONS</small>
+          <small>
+            {formatCompactUsd(Number(riskAssessment?.absolute_delta_exposure_usd ?? "0"))} ACTUAL · TARGET ≤ {formatCompactUsd(Number(riskAssessment?.auto_hedge_target_notional_usd ?? "900000"))}
+          </small>
         </div>
       )}
 
@@ -766,7 +788,11 @@ export default function Home() {
 
           <Panel
             title="Hedge Decision Workspace · Simulated Execution"
-            meta={mode === "manual" ? "SYSTEM-ASSISTED · TRADER-CONTROLLED · STEP 9.3" : "AUTO RISK CONTROL · STEP 9.4 DEFERRED"}
+            meta={autoRiskActive
+              ? "AUTO RISK CONTROL · HARD-LIMIT EXECUTION · STEP 9.4"
+              : mode === "manual"
+                ? "SYSTEM-ASSISTED · TRADER-CONTROLLED · STEP 9.3"
+                : "AUTO RISK CONTROL · ARMED AT HARD LIMIT"}
             grow
           >
             {!scenario ? (
@@ -775,6 +801,14 @@ export default function Home() {
                 detail="The slow client-flow simulator has not booked its first auto-accepted trade yet."
                 roomy
               />
+            ) : autoRiskActive && autoHedgeIntervention ? (
+              <div className="hedge-workspace">
+                <AutoRiskControl
+                  intervention={autoHedgeIntervention}
+                  orders={hedgeOrders}
+                  riskAssessment={riskAssessment}
+                />
+              </div>
             ) : mode === "auto" ? (
               <div className="hedge-workspace">
                 <div className="recommendation-grid risk-recommendation">
@@ -784,8 +818,8 @@ export default function Home() {
                   <div><small>ADVISORY REMAINING</small><strong>{remainingRiskHedge === null ? "—" : formatBtc(remainingRiskHedge)}</strong></div>
                 </div>
                 <UnavailableFeature
-                  title="Advisory optimization is active; automatic execution is not"
-                  detail="Step 9.3 generates real advisory HedgePlans, but every plan remains trader-controlled. Hard-limit automatic optimization and execution begin only in Step 9.4."
+                  title="Auto Risk Control is armed"
+                  detail="Normal YELLOW and RED grace-period recommendations remain trader-controlled. If exposure stays above the $3M hard limit for five seconds, Auto Risk Control takes ownership, optimizes the latest $900K-target requirement, and executes through simulated HedgeOrders and HedgeFills."
                   compact
                 />
               </div>
@@ -1026,8 +1060,18 @@ export default function Home() {
                 <div><small>DERIVATIVE DELTA</small><strong>{formatBtc(Number(deskState.derivative_delta_btc))}</strong></div>
                 <div><small>WORKING ORDER DELTA</small><strong>{formatBtc(Number(deskState.working_order_delta_btc))}</strong></div>
                 <div><small>PROJECTED DELTA</small><strong>{formatBtc(projectedDelta)}</strong></div>
-                <div><small>ADVISORY TARGET</small><strong>{riskTargetDelta === null ? "—" : formatBtc(riskTargetDelta)}</strong></div>
-                <div><small>ADVISORY REMAINING</small><strong>{remainingRiskHedge === null ? "—" : formatBtc(remainingRiskHedge)}</strong></div>
+                <div>
+                  <small>{autoRiskActive ? "AUTO TARGET" : "ADVISORY TARGET"}</small>
+                  <strong>{autoRiskActive
+                    ? riskAssessment?.auto_hedge_target_delta_btc === null || !riskAssessment ? "—" : formatBtc(Number(riskAssessment.auto_hedge_target_delta_btc))
+                    : riskTargetDelta === null ? "—" : formatBtc(riskTargetDelta)}</strong>
+                </div>
+                <div>
+                  <small>{autoRiskActive ? "AUTO REMAINING" : "ADVISORY REMAINING"}</small>
+                  <strong>{autoRiskActive
+                    ? riskAssessment?.auto_remaining_hedge_requirement_btc === null || !riskAssessment ? "—" : formatBtc(Number(riskAssessment.auto_remaining_hedge_requirement_btc))
+                    : remainingRiskHedge === null ? "—" : formatBtc(remainingRiskHedge)}</strong>
+                </div>
               </div>
               <div className={`risk-status risk-${(riskAssessment?.risk_band ?? "unavailable").toLowerCase()}`}>
                 <strong>{riskAssessment?.risk_band ?? "UNAVAILABLE"}</strong>
@@ -1038,9 +1082,14 @@ export default function Home() {
                     : "USD SPOT RISK REFERENCE UNAVAILABLE"}
                 </small>
               </div>
-              {(riskAssessment?.working_order_conflict || riskAssessment?.working_order_overhedge) && (
+              {!autoRiskActive && (riskAssessment?.working_order_conflict || riskAssessment?.working_order_overhedge) && (
                 <p className="risk-guard" role="alert">
                   {riskAssessment.auto_hedge_blocked_reasons.join(" · ").replaceAll("_", " ")}
+                </p>
+              )}
+              {autoRiskActive && autoHedgeIntervention?.status === "BLOCKED" && (
+                <p className="risk-guard" role="alert">
+                  {autoHedgeIntervention.reason_codes.join(" · ").replaceAll("_", " ")}
                 </p>
               )}
               <p className="future-note">
@@ -1062,11 +1111,11 @@ export default function Home() {
                   <div key={order.hedge_order_id}>
                     <span>
                       <strong>{order.instrument_type === "SPOT" ? "SPOT" : "PERP"} · {order.side}</strong>
-                      <small>{order.venue} · SIMULATED</small>
+                      <small>{order.venue} · {order.origin.replaceAll("_", " ")} · SIMULATED</small>
                     </span>
                     <span className="blotter-progress">
                       <strong>{formatQuantity(order.filled_quantity_btc)} / {formatQuantity(order.quantity_btc)} BTC</strong>
-                      <small className={order.status === "FILLED" ? "positive" : "warning"}>{order.status.replace("_", " ")}</small>
+                      <small className={order.status === "FILLED" ? "positive" : order.status === "CANCELLED" ? "negative" : "warning"}>{order.status.replace("_", " ")}</small>
                     </span>
                   </div>
                 ))}
@@ -1087,9 +1136,102 @@ export default function Home() {
 
       <footer className="terminal-footer">
         <span>LIVE MARKET: KRAKEN + COINBASE + OKX SPOT/PERP · RISK POLICY V1.1 · HEDGE OPTIMIZER V1</span>
-        <span>{flowActive ? "FLOW ACTIVE" : "FLOW PAUSED"} · {mode === "manual" ? "ADVISORY · TRADER CONTROLLED" : "AUTO CONTROL · STEP 9.4 DEFERRED"}</span>
+        <span>{flowActive ? "FLOW ACTIVE" : "FLOW PAUSED"} · {autoRiskActive ? `AUTO RISK · ${autoHedgeIntervention?.status ?? "STARTING"}` : mode === "manual" ? "ADVISORY · TRADER CONTROLLED" : "AUTO RISK · ARMED"}</span>
       </footer>
     </main>
+  );
+}
+
+function AutoRiskControl({
+  intervention,
+  riskAssessment,
+  orders,
+}: {
+  intervention: AutoHedgeIntervention;
+  riskAssessment: RiskAssessment | null;
+  orders: HedgeOrder[];
+}) {
+  const plan = intervention.active_plan;
+  const ownedOrders = orders.filter(
+    (order) => order.source_intervention_id === intervention.intervention_id,
+  );
+  const orderedQuantity = ownedOrders.reduce(
+    (sum, order) => sum + Number(order.quantity_btc),
+    0,
+  );
+  const filledQuantity = ownedOrders.reduce(
+    (sum, order) => sum + Number(order.filled_quantity_btc),
+    0,
+  );
+  const activeOrderCount = ownedOrders.filter(isWorkingHedgeOrder).length;
+  const currentExposure = riskAssessment?.absolute_delta_exposure_usd
+    ?? intervention.current_exposure_usd;
+
+  return (
+    <section className={`system-recommendation auto-risk-control auto-status-${intervention.status.toLowerCase()}`}>
+      <div className="system-recommendation-heading">
+        <div>
+          <span>AUTO RISK CONTROL</span>
+          <strong>HARD LIMIT BREACH · EXECUTION OWNERSHIP ACTIVE</strong>
+        </div>
+        <span className="plan-status">{intervention.status.replaceAll("_", " ")}</span>
+      </div>
+
+      <div className="auto-risk-summary">
+        <div><small>CURRENT EXPOSURE</small><strong>{currentExposure === null ? "—" : formatCompactUsd(Number(currentExposure))}</strong></div>
+        <div><small>HARD LIMIT</small><strong>$3.0M</strong></div>
+        <div><small>AUTO TARGET</small><strong>≤ {formatCompactUsd(Number(intervention.target_notional_usd))}</strong></div>
+        <div><small>REMAINING REQUIREMENT</small><strong>{intervention.latest_auto_remaining_hedge_btc === null ? "—" : formatBtc(Number(intervention.latest_auto_remaining_hedge_btc))}</strong></div>
+      </div>
+
+      {plan && plan.legs.length > 0 ? (
+        <>
+          <div className="hedge-plan-legs">
+            {plan.legs.map((leg) => (
+              <div className="hedge-plan-leg" key={leg.leg_id}>
+                <span className="plan-leg-market">
+                  <strong>{leg.venue} {leg.instrument_type === "PERPETUAL" ? "PERP" : "SPOT"}</strong>
+                  <small>{leg.instrument_id}</small>
+                </span>
+                <span><small>SIDE</small><strong className={leg.side === "BUY" ? "bid" : "ask"}>{displayHedgeLegSide(leg.instrument_type, leg.side)}</strong></span>
+                <span><small>BTC EQUIVALENT</small><strong>{formatBtc(Number(leg.quantity_btc))}</strong></span>
+                <span><small>EXPECTED VWAP</small><strong>{formatUsd(Number(leg.expected_vwap))}</strong></span>
+                <span><small>TOTAL COST</small><strong>{Number(leg.expected_total_cost_bps).toFixed(2)} bps</strong></span>
+              </div>
+            ))}
+          </div>
+          <div className="plan-economics">
+            <span><small>PLAN MODE</small><strong>AUTO RISK</strong></span>
+            <span><small>PLAN STATUS</small><strong>{plan.status.replaceAll("_", " ")}</strong></span>
+            <span><small>EXPECTED COST</small><strong>{plan.total_expected_cost_usd === null ? "—" : formatSignedCompactUsd(Number(plan.total_expected_cost_usd))}</strong></span>
+            <span><small>MARKET SNAPSHOT</small><strong>v{plan.market_snapshot_version}</strong></span>
+          </div>
+        </>
+      ) : (
+        <div className="system-no-plan compact">
+          <strong>{intervention.status.replaceAll("_", " ")}</strong>
+          <p>{humanizeReason(intervention.reason_codes[0] ?? "WAITING_FOR_ELIGIBLE_LIQUIDITY")}</p>
+        </div>
+      )}
+
+      <div className="auto-execution-progress" role="status">
+        <span>
+          <small>SIMULATED FILLS</small>
+          <strong>{filledQuantity.toFixed(2)} / {orderedQuantity.toFixed(2)} BTC</strong>
+        </span>
+        <span>
+          <small>WORKING AUTO ORDERS</small>
+          <strong>{activeOrderCount}</strong>
+        </span>
+        <span>
+          <small>PLANS GENERATED</small>
+          <strong>{intervention.generated_plan_ids.length}</strong>
+        </span>
+      </div>
+      <p className="auto-risk-ownership-note">
+        Risk control has execution ownership. No trader confirmation or Manual Override is available for this active AUTO_RISK plan. Orders and fills remain simulated.
+      </p>
+    </section>
   );
 }
 
@@ -1120,7 +1262,7 @@ function SystemRecommendation({
   const plan = recommendation.plan;
   const statusLabel = recommendation.lifecycle_status.replaceAll("_", " ");
   const noPlanCopy = recommendation.lifecycle_status === "AUTO_HANDOFF_PENDING"
-    ? "AUTO_HEDGE_REQUIRED has ended the advisory window. Step 9.4 automatic execution is intentionally not active."
+    ? "AUTO_HEDGE_REQUIRED has ended the advisory window. Auto Risk Control owns optimization and simulated execution until exposure is at or below $900K."
     : recommendation.lifecycle_status === "NOT_REQUIRED"
       ? "RiskPolicy has no non-zero advisory hedge requirement for the current desk state."
       : "No executable optimizer allocation is available for the current desk and market state.";
@@ -1341,7 +1483,9 @@ function describeEvent(event: FlowEvent): string {
     case "HEDGE_ORDER_UPDATED":
       return `${String(event.payload.status).replace("_", " ")} · ${formatBtc(payloadNumber(event, "remaining_quantity_btc"))} remaining`;
     case "HEDGE_ORDERS_CANCELLED":
-      return "Unfilled hedge orders cancelled · allocation returned to draft";
+      return event.payload.origin === "AUTO_RISK"
+        ? `Auto Risk remainder cancelled · ${String(event.payload.reason).replaceAll("_", " ")}`
+        : "Unfilled hedge orders cancelled · allocation returned to draft";
     case "POSITION_UPDATED":
       return `Actual ${formatBtc(payloadNumber(event, "total_delta_btc"))} · working ${formatBtc(payloadNumber(event, "working_order_delta_btc"))} · state v${event.desk_state_version_after}`;
     case "RISK_RED":
@@ -1349,9 +1493,27 @@ function describeEvent(event: FlowEvent): string {
     case "AUTO_HEDGE_ARMED":
       return `${payloadNumber(event, "grace_seconds").toFixed(0)}-second risk-control countdown started`;
     case "AUTO_HEDGE_CANCELLED":
-      return `Exposure exited RED · now ${String(event.payload.exit_risk_band)}`;
+      return event.payload.reason
+        ? `Auto intervention cancelled · ${String(event.payload.reason).replaceAll("_", " ")}`
+        : `Exposure exited RED · now ${String(event.payload.exit_risk_band)}`;
     case "AUTO_HEDGE_REQUIRED":
-      return `Auto requirement ${formatBtc(payloadNumber(event, "auto_remaining_hedge_requirement_btc"))} toward ${formatCompactUsd(payloadNumber(event, "auto_hedge_target_notional_usd"))} · no order created`;
+      return `Auto requirement ${formatBtc(payloadNumber(event, "auto_remaining_hedge_requirement_btc"))} toward ${formatCompactUsd(payloadNumber(event, "auto_hedge_target_notional_usd"))}`;
+    case "AUTO_HEDGE_STARTED":
+      return `Risk control took ownership at ${formatCompactUsd(payloadNumber(event, "current_exposure_usd"))}`;
+    case "AUTO_HEDGE_PLAN_CREATED":
+      return `${String(event.payload.status).replaceAll("_", " ")} · ${formatBtc(payloadNumber(event, "allocated_hedge_delta_btc"))} allocated automatically`;
+    case "AUTO_HEDGE_ORDER_CREATED":
+      return `${String(event.payload.venue)} ${String(event.payload.instrument_type)} ${String(event.payload.side)} ${formatBtc(payloadNumber(event, "quantity_btc"))}`;
+    case "AUTO_HEDGE_PARTIAL_FILL":
+      return `${formatBtc(payloadNumber(event, "quantity_btc"))} auto fill · ${formatBtc(payloadNumber(event, "remaining_quantity_btc"))} order remainder`;
+    case "AUTO_HEDGE_REOPTIMIZING":
+      return `Reoptimizing · ${String(event.payload.reason).replaceAll("_", " ")}`;
+    case "AUTO_HEDGE_INCOMPLETE":
+      return `${formatBtc(payloadNumber(event, "remaining_hedge_requirement_btc"))} still required · waiting for market change`;
+    case "AUTO_HEDGE_BLOCKED":
+      return `Critical · ${Array.isArray(event.payload.reasons) ? event.payload.reasons.join(" · ").replaceAll("_", " ") : "NO VALID CANDIDATE"}`;
+    case "AUTO_HEDGE_COMPLETE":
+      return `Target reached at ${formatCompactUsd(payloadNumber(event, "final_exposure_usd"))} · automatic execution stopped`;
     case "HEDGE_PLAN_GENERATED":
       return `${String(event.payload.status).replaceAll("_", " ")} · ${formatBtc(payloadNumber(event, "allocated_hedge_delta_btc"))} allocated`;
     case "HEDGE_PLAN_STALE":
@@ -1382,6 +1544,10 @@ function formatPricingSource(source: string): string {
 function signedHedgeOrderQuantity(order: HedgeOrder): number {
   const quantity = Number(order.remaining_quantity_btc);
   return order.side === "BUY" || order.side === "LONG" ? quantity : -quantity;
+}
+
+function isWorkingHedgeOrder(order: HedgeOrder): boolean {
+  return order.status === "OPEN" || order.status === "PARTIALLY_FILLED";
 }
 
 function payloadNumber(event: FlowEvent, key: string): number {

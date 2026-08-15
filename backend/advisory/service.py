@@ -213,7 +213,7 @@ class AdvisoryHedgeService:
                 self._clear_current()
             return self._view(
                 AdvisoryLifecycleStatus.AUTO_HANDOFF_PENDING,
-                reasons=("AUTO_HEDGE_REQUIRED_STEP_9_4_NOT_ACTIVE",),
+                reasons=("AUTO_RISK_CONTROL_HAS_EXECUTION_OWNERSHIP",),
             )
         if not actionable:
             reasons = (

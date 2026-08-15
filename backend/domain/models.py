@@ -42,6 +42,7 @@ class QuoteStatus(str, Enum):
 class HedgeOrderOrigin(str, Enum):
     MANUAL = "MANUAL"
     SYSTEM_ADVISORY = "SYSTEM_ADVISORY"
+    AUTO_RISK = "AUTO_RISK"
 
 
 class HedgeSide(str, Enum):
@@ -55,6 +56,7 @@ class HedgeOrderStatus(str, Enum):
     OPEN = "OPEN"
     PARTIALLY_FILLED = "PARTIALLY_FILLED"
     FILLED = "FILLED"
+    CANCELLED = "CANCELLED"
 
 
 class EventType(str, Enum):
@@ -72,6 +74,14 @@ class EventType(str, Enum):
     AUTO_HEDGE_ARMED = "AUTO_HEDGE_ARMED"
     AUTO_HEDGE_CANCELLED = "AUTO_HEDGE_CANCELLED"
     AUTO_HEDGE_REQUIRED = "AUTO_HEDGE_REQUIRED"
+    AUTO_HEDGE_STARTED = "AUTO_HEDGE_STARTED"
+    AUTO_HEDGE_PLAN_CREATED = "AUTO_HEDGE_PLAN_CREATED"
+    AUTO_HEDGE_ORDER_CREATED = "AUTO_HEDGE_ORDER_CREATED"
+    AUTO_HEDGE_PARTIAL_FILL = "AUTO_HEDGE_PARTIAL_FILL"
+    AUTO_HEDGE_REOPTIMIZING = "AUTO_HEDGE_REOPTIMIZING"
+    AUTO_HEDGE_INCOMPLETE = "AUTO_HEDGE_INCOMPLETE"
+    AUTO_HEDGE_BLOCKED = "AUTO_HEDGE_BLOCKED"
+    AUTO_HEDGE_COMPLETE = "AUTO_HEDGE_COMPLETE"
     HEDGE_PLAN_GENERATED = "HEDGE_PLAN_GENERATED"
     HEDGE_PLAN_STALE = "HEDGE_PLAN_STALE"
     HEDGE_PLAN_ACCEPTED = "HEDGE_PLAN_ACCEPTED"
@@ -166,6 +176,8 @@ class HedgeOrder(BaseModel):
     created_at: datetime
     created_desk_state_version: int = Field(ge=0)
     source_plan_id: Optional[str] = None
+    source_intervention_id: Optional[str] = None
+    source_breach_id: Optional[str] = None
     native_quantity: Optional[Decimal] = Field(default=None, gt=0)
     native_quantity_unit: Optional[str] = None
     market_snapshot_version: Optional[int] = Field(default=None, ge=0)
@@ -195,6 +207,8 @@ class HedgeOrder(BaseModel):
             raise ValueError("PARTIALLY_FILLED orders require a partial filled quantity")
         if self.status is HedgeOrderStatus.FILLED and self.remaining_quantity_btc != 0:
             raise ValueError("FILLED hedge orders must have zero remaining quantity")
+        if self.status is HedgeOrderStatus.CANCELLED and self.remaining_quantity_btc == 0:
+            raise ValueError("CANCELLED hedge orders must preserve cancelled quantity")
         return self
 
 

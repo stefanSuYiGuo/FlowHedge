@@ -12,9 +12,9 @@ export type QuoteStatus =
   | "EXPIRED"
   | "SUPERSEDED"
   | "REJECTED";
-export type HedgeOrderOrigin = "MANUAL" | "SYSTEM_ADVISORY";
+export type HedgeOrderOrigin = "MANUAL" | "SYSTEM_ADVISORY" | "AUTO_RISK";
 export type HedgeSide = "BUY" | "SELL" | "LONG" | "SHORT";
-export type HedgeOrderStatus = "OPEN" | "PARTIALLY_FILLED" | "FILLED";
+export type HedgeOrderStatus = "OPEN" | "PARTIALLY_FILLED" | "FILLED" | "CANCELLED";
 export type MarketConnectionStatus =
   | "CONNECTING"
   | "LIVE"
@@ -221,6 +221,8 @@ export interface HedgeOrder {
   created_at: string;
   created_desk_state_version: number;
   source_plan_id: string | null;
+  source_intervention_id: string | null;
+  source_breach_id: string | null;
   native_quantity: string | null;
   native_quantity_unit: string | null;
   market_snapshot_version: number | null;
@@ -280,9 +282,38 @@ export interface DemoWorkspaceState {
   desk_state: DeskState;
   risk_assessment: RiskAssessment;
   advisory_recommendation: AdvisoryHedgeRecommendation;
+  auto_hedge_intervention: AutoHedgeIntervention | null;
   hedge_orders: HedgeOrder[];
   hedge_fills: HedgeFill[];
   events: FlowEvent[];
+}
+
+export type AutoHedgeInterventionStatus =
+  | "STARTING"
+  | "EXECUTING"
+  | "REOPTIMIZING"
+  | "INCOMPLETE"
+  | "BLOCKED"
+  | "COMPLETE"
+  | "CANCELLED";
+
+export interface AutoHedgeIntervention {
+  intervention_id: string;
+  breach_id: string;
+  status: AutoHedgeInterventionStatus;
+  started_at: string;
+  completed_at: string | null;
+  target_notional_usd: string;
+  latest_risk_assessment_id: string;
+  current_exposure_usd: string | null;
+  latest_auto_remaining_hedge_btc: string | null;
+  active_plan_id: string | null;
+  active_plan: HedgePlan | null;
+  generated_plan_ids: string[];
+  auto_order_ids: string[];
+  planned_quantity_btc: string;
+  filled_quantity_btc: string;
+  reason_codes: string[];
 }
 
 export type HedgePlanStatus =

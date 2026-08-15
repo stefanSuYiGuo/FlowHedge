@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 
 from ..config import RiskPolicyConfig, risk_policy_config
 from ..domain.models import DeskState, InstrumentType
@@ -18,6 +18,7 @@ from .models import (
 
 
 RISK_REFERENCE_VENUES = (MarketVenue.KRAKEN, MarketVenue.COINBASE)
+AUTO_HEDGE_TARGET_QUANTUM_BTC = Decimal("0.00000001")
 
 
 def build_risk_reference_price(
@@ -238,8 +239,15 @@ class RiskPolicy:
             auto_target = Decimal("0")
         else:
             direction = Decimal("1") if actual > 0 else Decimal("-1")
-            auto_target = (
+            raw_auto_target = (
                 direction * assessment.auto_hedge_target_notional_usd / price
+            )
+            # Keep the policy target on the desk's BTC accounting grid and round
+            # toward zero. The resulting notional is never above the $900K cap,
+            # and the execution layer is not left chasing a sub-satoshi residual.
+            auto_target = raw_auto_target.quantize(
+                AUTO_HEDGE_TARGET_QUANTUM_BTC,
+                rounding=ROUND_DOWN,
             )
         auto_gross = auto_target - actual
         auto_remaining, auto_conflict, auto_overhedge = self._remaining_requirement(

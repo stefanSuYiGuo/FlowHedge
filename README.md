@@ -308,10 +308,10 @@ the snapshot and book timestamps used. USD conversion is explicit: USD uses an
 identity conversion, while USDT and USDC retain their centralized 1:1 demo
 assumption labels.
 
-Taker fees are represented by a centralized configuration model. No fee tier
-has been supplied, so the default result reports `fee_status=UNCONFIGURED`,
-keeps all pre-fee economics available, and leaves all-in values null rather
-than inventing an institutional fee.
+Taker fees are represented by a centralized configuration model. The current
+demo runtime supplies the explicitly disclosed Step 9.3.1 uniform 2.0 bps
+assumption; callers can still pass an empty or alternative schedule, in which
+case results preserve pre-fee economics and honestly report unconfigured fees.
 
 - `POST /analytics/execution-cost/estimate` evaluates one standalone market.
 - `POST /analytics/execution-cost/compare` evaluates every registered candidate
@@ -399,6 +399,33 @@ to exclude stale, disconnected, illiquid, metadata-incomplete, or funding-
 incomplete candidates. Test coverage includes fully and partially feasible
 plans, fee application, plan acceptance, idempotency, invalidation, and
 order/fill accounting.
+
+## Step 9.4 Hard-limit Auto Hedge
+
+RiskPolicy v1.1's persistent hard-breach lifecycle now hands the existing
+idempotent `AUTO_HEDGE_REQUIRED` event to a dedicated Auto Risk Controller.
+RED remains trader-controlled during the five-second grace period. If the
+breach persists, the controller refreshes DeskState, working orders, the risk
+reference, RiskAssessment, and executable markets before building an
+`AUTO_RISK` optimization request from `auto_remaining_hedge_requirement_btc`.
+
+The controller reuses the Step 9.1/9.2 optimizer and converts legitimate full
+or partial plans into auditable `AUTO_RISK` HedgeOrders. Simulated execution
+still passes through the ordinary HedgeOrder → HedgeFill → DeskState accounting
+chain. Auto-owned orders carry intervention, breach, and plan identifiers and
+can be cancelled after target completion, requirement shrinkage, or venue/data
+invalidation. Repeated trigger events for one breach cannot duplicate an
+intervention or its orders.
+
+Every fill and client-flow change is reassessed against the latest reference
+price. Once intervention begins, it continues below the normal $1M soft
+boundary until absolute exposure is at or below the buffered $900K Auto Risk
+target; it never intentionally flattens the desk. Missing funding continues to
+exclude only the affected Perpetual, insufficient legitimate liquidity executes
+the feasible portion and waits for market change, and a complete lack of valid
+candidates produces a visible critical blocked state rather than fabricated
+liquidity. The existing recommendation area switches to Auto Risk status and
+removes trader acceptance/override controls while execution ownership is active.
 
 ## Validate
 
