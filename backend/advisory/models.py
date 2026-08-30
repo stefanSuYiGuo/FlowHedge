@@ -12,6 +12,7 @@ from ..auto_hedge.models import AutoHedgeIntervention
 from ..domain.models import ClientFlowState, DeskState, Event, HedgeFill, HedgeOrder
 from ..hedge_optimizer.models import HedgePlan
 from ..risk.models import RiskAssessment
+from ..simulated_execution.models import ExecutionBatchMetrics
 
 
 class AdvisoryLifecycleStatus(str, Enum):
@@ -48,4 +49,5 @@ class AdvisoryWorkspaceState(BaseModel):
     auto_hedge_intervention: Optional[AutoHedgeIntervention] = None
     hedge_orders: tuple[HedgeOrder, ...]
     hedge_fills: tuple[HedgeFill, ...]
+    execution_batches: tuple[ExecutionBatchMetrics, ...] = ()
     events: tuple[Event, ...]

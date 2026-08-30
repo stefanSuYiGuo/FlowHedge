@@ -227,6 +227,11 @@ export interface HedgeOrder {
   native_quantity_unit: string | null;
   market_snapshot_version: number | null;
   expected_vwap_usd: string | null;
+  arrival_mid_usd: string | null;
+  expected_taker_fee_bps: string | null;
+  expected_fee_usd: string | null;
+  expected_price_cost_usd: string | null;
+  expected_all_in_cost_usd: string | null;
 }
 
 export interface HedgeFill {
@@ -239,6 +244,16 @@ export interface HedgeFill {
   fill_price_usd: string;
   filled_at: string;
   execution_source: string;
+  venue: string | null;
+  market_snapshot_version: number | null;
+  arrival_mid_usd: string | null;
+  expected_vwap_usd: string | null;
+  filled_notional_usd: string | null;
+  taker_fee_bps: string | null;
+  fee_usd: string | null;
+  slippage_vs_expected_usd: string | null;
+  implementation_shortfall_usd: string | null;
+  all_in_cost_usd: string | null;
 }
 
 export interface FlowEvent {
@@ -285,6 +300,7 @@ export interface DemoWorkspaceState {
   auto_hedge_intervention: AutoHedgeIntervention | null;
   hedge_orders: HedgeOrder[];
   hedge_fills: HedgeFill[];
+  execution_batches: ExecutionBatchMetrics[];
   events: FlowEvent[];
 }
 
@@ -496,4 +512,98 @@ export interface HedgeCancellationResult {
   desk_state_before: DeskState;
   desk_state_after: DeskState;
   events: FlowEvent[];
+}
+
+export interface ManualHedgeLegRequest {
+  venue: "COINBASE" | "KRAKEN" | "OKX";
+  instrument_type: "SPOT" | "PERPETUAL";
+  quantity_btc: string;
+}
+
+export interface ManualExecutionLegPreview {
+  venue: "COINBASE" | "KRAKEN" | "OKX";
+  instrument_id: string;
+  instrument_type: "SPOT" | "PERPETUAL";
+  side: "BUY" | "SELL";
+  requested_quantity_btc: string;
+  executable_quantity_btc: string;
+  unfilled_quantity_btc: string;
+  status: string;
+  status_reason: string | null;
+  market_snapshot_version: number;
+  arrival_mid_usd: string | null;
+  expected_vwap_usd: string | null;
+  spread_cost_bps: string | null;
+  depth_impact_bps: string | null;
+  taker_fee_bps: string | null;
+  expected_fee_usd: string | null;
+  expected_price_cost_usd: string | null;
+  expected_all_in_cost_usd: string | null;
+}
+
+export interface ManualHedgePreview {
+  preview_id: string;
+  request_id: string;
+  created_at: string;
+  expires_at: string;
+  desk_state_version: number;
+  market_snapshot_version: number;
+  actual_delta_btc: string;
+  advisory_target_delta_btc: string | null;
+  maximum_hedge_quantity_btc: string;
+  submitted_hedge_delta_btc: string;
+  projected_delta_btc: string;
+  can_submit: boolean;
+  reason_codes: string[];
+  legs: ManualExecutionLegPreview[];
+  total_expected_fee_usd: string | null;
+  total_expected_all_in_cost_usd: string | null;
+}
+
+export interface ExecutionOrderMetrics {
+  hedge_order_id: string;
+  venue: string;
+  instrument_id: string;
+  instrument_type: "SPOT" | "PERPETUAL";
+  side: string;
+  execution_source: string;
+  status: string;
+  market_snapshot_version: number | null;
+  ordered_quantity_btc: string;
+  filled_quantity_btc: string;
+  remaining_quantity_btc: string;
+  expected_vwap_usd: string | null;
+  realized_vwap_usd: string | null;
+  arrival_mid_usd: string | null;
+  slippage_vs_expected_usd: string;
+  implementation_shortfall_usd: string;
+  taker_fee_bps: string | null;
+  fee_usd: string;
+  filled_notional_usd: string;
+  all_in_cost_usd: string;
+}
+
+export interface ExecutionBatchMetrics {
+  execution_id: string;
+  batch_id: string;
+  origin: HedgeOrderOrigin;
+  executed_at: string;
+  status: "FILLED" | "PARTIALLY_FILLED" | "UNFILLED";
+  market_snapshot_version: number;
+  requested_quantity_btc: string;
+  filled_quantity_btc: string;
+  remaining_quantity_btc: string;
+  expected_vwap_usd: string | null;
+  realized_vwap_usd: string | null;
+  filled_notional_usd: string;
+  implementation_shortfall_usd: string;
+  slippage_vs_expected_usd: string;
+  fee_usd: string;
+  all_in_cost_usd: string;
+  orders: ExecutionOrderMetrics[];
+}
+
+export interface ManualHedgeSubmission {
+  order_batch: HedgeOrderBatchResult;
+  preview: ManualHedgePreview;
 }

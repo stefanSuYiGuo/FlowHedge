@@ -182,6 +182,11 @@ class HedgeOrder(BaseModel):
     native_quantity_unit: Optional[str] = None
     market_snapshot_version: Optional[int] = Field(default=None, ge=0)
     expected_vwap_usd: Optional[Decimal] = Field(default=None, gt=0)
+    arrival_mid_usd: Optional[Decimal] = Field(default=None, gt=0)
+    expected_taker_fee_bps: Optional[Decimal] = Field(default=None, ge=0)
+    expected_fee_usd: Optional[Decimal] = Field(default=None, ge=0)
+    expected_price_cost_usd: Optional[Decimal] = Field(default=None, ge=0)
+    expected_all_in_cost_usd: Optional[Decimal] = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def quantities_and_side_must_reconcile(self) -> "HedgeOrder":
@@ -226,6 +231,16 @@ class HedgeFill(BaseModel):
     fill_price_usd: Decimal = Field(gt=0)
     filled_at: datetime
     execution_source: str
+    venue: Optional[str] = None
+    market_snapshot_version: Optional[int] = Field(default=None, ge=0)
+    arrival_mid_usd: Optional[Decimal] = Field(default=None, gt=0)
+    expected_vwap_usd: Optional[Decimal] = Field(default=None, gt=0)
+    filled_notional_usd: Optional[Decimal] = Field(default=None, ge=0)
+    taker_fee_bps: Optional[Decimal] = Field(default=None, ge=0)
+    fee_usd: Optional[Decimal] = Field(default=None, ge=0)
+    slippage_vs_expected_usd: Optional[Decimal] = None
+    implementation_shortfall_usd: Optional[Decimal] = None
+    all_in_cost_usd: Optional[Decimal] = None
 
 
 class DeskState(BaseModel):

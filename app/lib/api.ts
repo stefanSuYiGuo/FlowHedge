@@ -10,6 +10,10 @@ import type {
   HedgeFillResult,
   HedgeOrder,
   HedgeOrderBatchResult,
+  ExecutionBatchMetrics,
+  ManualHedgeLegRequest,
+  ManualHedgePreview,
+  ManualHedgeSubmission,
   MarketStateView,
   UnifiedMarketSnapshot,
 } from "./types";
@@ -148,6 +152,41 @@ export function createManualHedgeOrders(
       perp_quantity_btc: perpQuantityBtc,
     }),
   });
+}
+
+export function previewManualHedge(
+  requestId: string,
+  legs: ManualHedgeLegRequest[],
+): Promise<ManualHedgePreview> {
+  return request<ManualHedgePreview>("/demo/manual-hedges/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ request_id: requestId, legs }),
+  });
+}
+
+export function submitManualHedge(
+  previewId: string,
+): Promise<ManualHedgeSubmission> {
+  return request<ManualHedgeSubmission>("/demo/manual-hedges/submit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ preview_id: previewId }),
+  });
+}
+
+export function executeHedgeBatch(
+  batchId: string,
+  executionId: string,
+): Promise<ExecutionBatchMetrics> {
+  return request<ExecutionBatchMetrics>(
+    `/demo/execution-batches/${encodeURIComponent(batchId)}/execute`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ execution_id: executionId }),
+    },
+  );
 }
 
 export function acceptAdvisoryHedgePlan(

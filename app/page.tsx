@@ -4,15 +4,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   acceptAdvisoryHedgePlan,
-  cancelUnfilledHedgeOrders,
-  createManualHedgeOrders,
+  executeHedgeBatch,
   getDemoWorkspace,
   getUnifiedMarketSnapshot,
   pauseClientFlow,
+  previewManualHedge,
   resetDemo,
   rejectAdvisoryHedgePlan,
   resumeClientFlow,
-  simulateHedgeFill,
+  submitManualHedge,
 } from "./lib/api";
 import type {
   AdvisoryHedgeRecommendation,
@@ -23,6 +23,8 @@ import type {
   FlowEvent,
   HedgeFill,
   HedgeOrder,
+  ExecutionBatchMetrics,
+  ManualHedgePreview,
   MarketStateView,
   PendingClientFlow,
   RiskAssessment,
@@ -30,6 +32,26 @@ import type {
 } from "./lib/types";
 
 type TradingMode = "manual" | "auto";
+type ManualMarketKey = "COINBASE:SPOT" | "KRAKEN:SPOT" | "OKX:SPOT" | "OKX:PERPETUAL";
+
+const manualMarkets: Array<{
+  key: ManualMarketKey;
+  venue: "COINBASE" | "KRAKEN" | "OKX";
+  instrumentType: "SPOT" | "PERPETUAL";
+  label: string;
+}> = [
+  { key: "COINBASE:SPOT", venue: "COINBASE", instrumentType: "SPOT", label: "COINBASE SPOT" },
+  { key: "KRAKEN:SPOT", venue: "KRAKEN", instrumentType: "SPOT", label: "KRAKEN SPOT" },
+  { key: "OKX:SPOT", venue: "OKX", instrumentType: "SPOT", label: "OKX SPOT" },
+  { key: "OKX:PERPETUAL", venue: "OKX", instrumentType: "PERPETUAL", label: "OKX PERP" },
+];
+
+const emptyManualAllocations: Record<ManualMarketKey, string> = {
+  "COINBASE:SPOT": "",
+  "KRAKEN:SPOT": "",
+  "OKX:SPOT": "",
+  "OKX:PERPETUAL": "",
+};
 
 const flatDeskState: DeskState = {
   version: 0,
@@ -54,8 +76,9 @@ export default function Home() {
   const [events, setEvents] = useState<FlowEvent[]>([]);
   const [hedgeOrders, setHedgeOrders] = useState<HedgeOrder[]>([]);
   const [hedgeFills, setHedgeFills] = useState<HedgeFill[]>([]);
-  const [spotAllocation, setSpotAllocation] = useState("");
-  const [perpAllocation, setPerpAllocation] = useState("");
+  const [manualAllocations, setManualAllocations] = useState<Record<ManualMarketKey, string>>({ ...emptyManualAllocations });
+  const [manualPreview, setManualPreview] = useState<ManualHedgePreview | null>(null);
+  const [executionBatches, setExecutionBatches] = useState<ExecutionBatchMetrics[]>([]);
   const [busy, setBusy] = useState(false);
   const [apiState, setApiState] = useState<"connecting" | "online" | "offline">(
     "connecting",
@@ -78,6 +101,7 @@ export default function Home() {
     setEvents(workspace.events);
     setHedgeOrders(workspace.hedge_orders);
     setHedgeFills(workspace.hedge_fills);
+    setExecutionBatches(workspace.execution_batches);
     setCompletedScenarios(workspace.client_flow.completed_scenarios);
     setPendingRfqs(workspace.client_flow.pending_rfqs);
     setCompletedFlowCount(workspace.client_flow.completed_count);
@@ -163,10 +187,6 @@ export default function Home() {
   const selectedMarketLabel = selectedMarketState
     ? `${selectedMarketState.venue} ${selectedMarketState.instrument_type === "PERPETUAL" ? "PERP" : "SPOT"}`
     : "MARKET LOADING";
-  const liveBook = krakenSpotState?.book ?? null;
-  const marketStatus = marketPollFailed
-    ? "DISCONNECTED"
-    : (krakenSpotState?.connection.status ?? "CONNECTING");
   const totalDelta = Number(deskState.total_delta_btc);
   const workingDelta = Number(deskState.working_order_delta_btc);
   const projectedDelta = totalDelta + workingDelta;
@@ -195,37 +215,34 @@ export default function Home() {
   const demoHedgeQuantity = hedgeOrdersCreated
     ? activeBatchOrders.reduce((sum, order) => sum + Number(order.quantity_btc), 0)
     : Math.abs(totalDelta);
-  const hasValidSpotPrecision = /^(?:\d+(?:\.\d{0,2})?)?$/.test(spotAllocation);
-  const hasValidPerpPrecision = /^(?:\d+(?:\.\d{0,2})?)?$/.test(perpAllocation);
-  const spotAllocationNumber = hasValidSpotPrecision
-    ? Number(spotAllocation || "0")
-    : Number.NaN;
-  const perpAllocationNumber = hasValidPerpPrecision
-    ? Number(perpAllocation || "0")
-    : Number.NaN;
-  const spotQuantityIsValid =
-    Number.isFinite(spotAllocationNumber) && spotAllocationNumber >= 0;
-  const perpQuantityIsValid =
-    Number.isFinite(perpAllocationNumber) && perpAllocationNumber >= 0;
-  const submittedHedgeQuantity = spotQuantityIsValid && perpQuantityIsValid
-    ? roundBtc(spotAllocationNumber + perpAllocationNumber)
+  const manualAllocationValues = manualMarkets.map((market) => {
+    const raw = manualAllocations[market.key];
+    const valid = /^(?:\d+(?:\.\d{0,2})?)?$/.test(raw);
+    const quantity = valid ? Number(raw || "0") : Number.NaN;
+    const marketState = marketStates.find(
+      (state) => state.venue === market.venue && state.instrument_type === market.instrumentType,
+    ) ?? null;
+    return {
+      ...market,
+      raw,
+      quantity,
+      valid: valid && Number.isFinite(quantity) && quantity >= 0,
+      marketState,
+      executable: marketState?.eligible === true && marketState.connection.status === "LIVE",
+    };
+  });
+  const manualQuantitiesAreValid = manualAllocationValues.every((allocation) => allocation.valid);
+  const submittedHedgeQuantity = manualQuantitiesAreValid
+    ? roundBtc(manualAllocationValues.reduce((sum, allocation) => sum + allocation.quantity, 0))
     : Number.NaN;
   const overHedgeQuantity = Number.isFinite(submittedHedgeQuantity)
     ? roundBtc(Math.max(0, submittedHedgeQuantity - demoHedgeQuantity))
     : 0;
   const validAllocation =
-    spotQuantityIsValid &&
-    perpQuantityIsValid &&
+    manualQuantitiesAreValid &&
     submittedHedgeQuantity > 0 &&
-    submittedHedgeQuantity <= demoHedgeQuantity;
-  const maximumSpotQuantity = roundBtc(Math.max(
-    0,
-    demoHedgeQuantity - (perpQuantityIsValid ? perpAllocationNumber : 0),
-  ));
-  const maximumPerpQuantity = roundBtc(Math.max(
-    0,
-    demoHedgeQuantity - (spotQuantityIsValid ? spotAllocationNumber : 0),
-  ));
+    submittedHedgeQuantity <= demoHedgeQuantity &&
+    manualAllocationValues.every((allocation) => allocation.quantity === 0 || allocation.executable);
   const requiredHedgeDelta = hedgeOrdersCreated
     ? activeHedgeOrders.reduce(
         (sum, order) => sum + signedHedgeOrderQuantity(order),
@@ -239,30 +256,12 @@ export default function Home() {
   const hedgeOutcomeDelta = totalDelta + (
     hedgeOrdersCreated ? requiredHedgeDelta : submittedHedgeDelta
   );
-  const spotHedgeSide = requiredHedgeDelta >= 0 ? "BUY" : "SELL";
-  const spotReferencePrice = liveBook
-    ? Number(spotHedgeSide === "BUY" ? liveBook.best_ask : liveBook.best_bid)
-    : null;
-  const canReviseAllocation =
-    hedgeOrdersCreated &&
-    activeHedgeOrders.every(
-      (order) => order.origin !== "AUTO_RISK" && Number(order.filled_quantity_btc) === 0,
-    );
   const allHedgeOrdersFilled =
     hedgeOrders.length > 0 && hedgeOrders.every((order) => ["FILLED", "CANCELLED"].includes(order.status));
-  const canSimulateHalfFill = hedgeOrders.some(
-    (order) =>
-      order.origin !== "AUTO_RISK" &&
-      isWorkingHedgeOrder(order) &&
-      Number(order.filled_quantity_btc) === 0 &&
-      Math.floor((Number(order.quantity_btc) * 100) / 2) > 0,
-  );
-  const canFillRemainder = hedgeOrders.some(
-    (order) =>
-      order.origin !== "AUTO_RISK" &&
-      isWorkingHedgeOrder(order) &&
-      Number(order.remaining_quantity_btc) > 0,
-  );
+  const latestExecutionBatch = executionBatches.at(-1) ?? null;
+  const activeManualPreview = manualPreview?.desk_state_version === deskState.version
+    ? manualPreview
+    : null;
   const visibleEvents = useMemo(() => events.slice(-30), [events]);
 
   async function refreshHedgeState() {
@@ -308,8 +307,9 @@ export default function Home() {
       setEvents([]);
       setHedgeOrders([]);
       setHedgeFills([]);
-      setSpotAllocation("");
-      setPerpAllocation("");
+      setManualAllocations({ ...emptyManualAllocations });
+      setManualPreview(null);
+      setExecutionBatches([]);
       setManualOverrideOpen(false);
       setApiState("online");
     } catch {
@@ -320,7 +320,7 @@ export default function Home() {
     }
   }
 
-  async function handleCreateHedgeOrders() {
+  async function handlePreviewManualHedge() {
     if (
       busy ||
       !scenario ||
@@ -333,20 +333,53 @@ export default function Home() {
     setNotice(null);
 
     try {
-      await createManualHedgeOrders(
-        spotAllocation || "0",
-        perpAllocation || "0",
-        `manual-hedge-v${deskState.version}-${Date.now()}`,
+      const preview = await previewManualHedge(
+        `manual-v${deskState.version}-${manualAllocationValues.map((allocation) => allocation.raw || "0").join("-")}`,
+        manualAllocationValues
+          .filter((allocation) => allocation.quantity > 0)
+          .map((allocation) => ({
+            venue: allocation.venue,
+            instrument_type: allocation.instrumentType,
+            quantity_btc: allocation.quantity.toFixed(2),
+          })),
       );
-      await refreshHedgeState();
-      setSpotAllocation("");
-      setPerpAllocation("");
+      setManualPreview(preview);
       setApiState("online");
       setNotice(
-        "Hedge orders created — actual delta is unchanged until simulated fills arrive.",
+        preview.can_submit
+          ? "Executable L2 preview ready — review venue economics before execution."
+          : "Preview completed, but one or more selected markets cannot currently execute.",
       );
     } catch (caught) {
-      setError(apiErrorMessage(caught, "The manual hedge allocation could not be created."));
+      setError(apiErrorMessage(caught, "The manual hedge allocation could not be previewed."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleExecuteManualHedge() {
+    if (busy || !activeManualPreview?.can_submit) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+
+    try {
+      const submission = await submitManualHedge(activeManualPreview.preview_id);
+      const metrics = await executeHedgeBatch(
+        submission.order_batch.batch_id,
+        `${submission.order_batch.batch_id}-manual-execution`,
+      );
+      await refreshHedgeState();
+      setManualAllocations({ ...emptyManualAllocations });
+      setManualPreview(null);
+      setApiState("online");
+      setNotice(
+        `${metrics.status.replaceAll("_", " ")} · ${Number(metrics.filled_quantity_btc).toFixed(2)} BTC filled across ${metrics.orders.length} venue leg${metrics.orders.length === 1 ? "" : "s"}.`,
+      );
+    } catch (caught) {
+      await refreshHedgeState().catch(() => undefined);
+      setManualPreview(null);
+      setError(apiErrorMessage(caught, "The manual multi-venue hedge could not be executed."));
     } finally {
       setBusy(false);
     }
@@ -365,13 +398,15 @@ export default function Home() {
 
     try {
       const batch = await acceptAdvisoryHedgePlan(plan.plan_id);
+      const metrics = await executeHedgeBatch(
+        batch.batch_id,
+        `${batch.batch_id}-system-execution`,
+      );
       await refreshHedgeState();
       setManualOverrideOpen(false);
       setApiState("online");
       setNotice(
-        batch.replayed
-          ? "System plan was already accepted — no duplicate orders were created."
-          : "System plan accepted — simulated hedge orders are working; no fills were created.",
+        `System plan executed through current L2 · ${Number(metrics.filled_quantity_btc).toFixed(2)} BTC ${metrics.status.toLowerCase().replaceAll("_", " ")}.`,
       );
     } catch (caught) {
       await refreshHedgeState().catch(() => undefined);
@@ -394,89 +429,12 @@ export default function Home() {
         await refreshHedgeState();
       }
       setManualOverrideOpen(true);
+      setManualPreview(null);
       setApiState("online");
-      setNotice("Manual Override selected — enter an independent Spot/Perp allocation.");
+      setNotice("Manual Override selected — allocate BTC independently across four executable markets.");
     } catch (caught) {
       await refreshHedgeState().catch(() => undefined);
       setError(apiErrorMessage(caught, "Manual Override could not be activated."));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleCancelAndRevise() {
-    if (busy || !canReviseAllocation) return;
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-
-    try {
-      await cancelUnfilledHedgeOrders();
-      await refreshHedgeState();
-      setApiState("online");
-      setNotice("Unfilled hedge orders cancelled — the allocation is editable again.");
-    } catch (caught) {
-      setError(apiErrorMessage(caught, "The hedge allocation could not be revised."));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleHalfFills() {
-    if (busy || !canSimulateHalfFill) return;
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-
-    try {
-      for (const order of hedgeOrders) {
-        if (order.origin === "AUTO_RISK" || !isWorkingHedgeOrder(order)) continue;
-        if (Number(order.filled_quantity_btc) !== 0) continue;
-        const partialQuantity =
-          Math.floor((Number(order.quantity_btc) * 100) / 2) / 100;
-        if (partialQuantity <= 0) continue;
-        await simulateHedgeFill(
-          order.hedge_order_id,
-          partialQuantity,
-          `${order.hedge_order_id}-half`,
-        );
-      }
-      await refreshHedgeState();
-      setApiState("online");
-      setNotice("Partial demo fills applied — actual exposure moved and working delta was reduced.");
-    } catch (caught) {
-      await refreshHedgeState().catch(() => undefined);
-      setError(apiErrorMessage(caught, "The partial fills could not be completed."));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleFillRemainder() {
-    if (busy || !canFillRemainder) return;
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-
-    try {
-      for (const order of hedgeOrders) {
-        if (order.origin === "AUTO_RISK" || !isWorkingHedgeOrder(order)) continue;
-        const remainingQuantity = Number(order.remaining_quantity_btc);
-        if (remainingQuantity <= 0) continue;
-        await simulateHedgeFill(
-          order.hedge_order_id,
-          order.remaining_quantity_btc,
-          `${order.hedge_order_id}-remainder`,
-        );
-      }
-      await refreshHedgeState();
-      setApiState("online");
-      setNotice(
-        "All current hedge orders filled — working delta cleared; actual delta includes any later client flow.",
-      );
-    } catch (caught) {
-      await refreshHedgeState().catch(() => undefined);
-      setError(apiErrorMessage(caught, "The remaining fills could not be completed."));
     } finally {
       setBusy(false);
     }
@@ -791,7 +749,7 @@ export default function Home() {
             meta={autoRiskActive
               ? "AUTO RISK CONTROL · HARD-LIMIT EXECUTION · STEP 9.4"
               : mode === "manual"
-                ? "SYSTEM-ASSISTED · TRADER-CONTROLLED · STEP 9.3"
+                ? "SYSTEM-ASSISTED · MULTI-VENUE EXECUTION · STEP 11"
                 : "AUTO RISK CONTROL · ARMED AT HARD LIMIT"}
             grow
           >
@@ -863,67 +821,52 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className={`allocation-controls ${hedgeOrdersCreated ? "locked" : ""}`}>
-                  <label>
-                    <span>SPOT HEDGE · BTC · MAX 2 DECIMALS</span>
-                    <input
-                      aria-describedby="spot-allocation-limit"
-                      aria-label="Spot hedge quantity in BTC"
-                      disabled={busy || hedgeOrdersCreated}
-                      inputMode="decimal"
-                      min="0"
-                      max={maximumSpotQuantity}
-                      step="0.01"
-                      type="number"
-                      value={spotAllocation}
-                      onBlur={() => {
-                        if (spotAllocation !== "" && spotQuantityIsValid) {
-                          setSpotAllocation(spotAllocationNumber.toFixed(2));
-                        }
-                      }}
-                      onChange={(event) => {
-                        const nextValue = event.target.value;
-                        if (nextValue === "" || /^\d*(?:\.\d{0,2})?$/.test(nextValue)) {
-                          setSpotAllocation(nextValue);
-                        }
-                      }}
-                    />
-                    <small className="allocation-limit" id="spot-allocation-limit">
-                      MAX {maximumSpotQuantity.toFixed(2)} BTC WITH CURRENT PERP
-                    </small>
-                  </label>
-                  <label>
-                    <span>PERP HEDGE · BTC · MAX 2 DECIMALS</span>
-                    <input
-                      aria-describedby="perp-allocation-limit"
-                      aria-label="Perpetual hedge quantity in BTC"
-                      disabled={busy || hedgeOrdersCreated}
-                      inputMode="decimal"
-                      min="0"
-                      max={maximumPerpQuantity}
-                      step="0.01"
-                      type="number"
-                      value={perpAllocation}
-                      onBlur={() => {
-                        if (perpAllocation !== "" && perpQuantityIsValid) {
-                          setPerpAllocation(perpAllocationNumber.toFixed(2));
-                        }
-                      }}
-                      onChange={(event) => {
-                        const nextValue = event.target.value;
-                        if (nextValue === "" || /^\d*(?:\.\d{0,2})?$/.test(nextValue)) {
-                          setPerpAllocation(nextValue);
-                        }
-                      }}
-                    />
-                    <small className="allocation-limit" id="perp-allocation-limit">
-                      MAX {maximumPerpQuantity.toFixed(2)} BTC WITH CURRENT SPOT
-                    </small>
-                  </label>
-                  <label>
-                    <span>EXECUTION SOURCE</span>
-                    <input readOnly value="FIXED STEP 4 SIMULATION" />
-                  </label>
+                <div className={`manual-market-allocation ${hedgeOrdersCreated ? "locked" : ""}`}>
+                  {manualAllocationValues.map((allocation) => {
+                    const otherQuantity = manualAllocationValues.reduce(
+                      (sum, candidate) => sum + (candidate.key === allocation.key || !candidate.valid ? 0 : candidate.quantity),
+                      0,
+                    );
+                    const maximum = roundBtc(Math.max(0, demoHedgeQuantity - otherQuantity));
+                    return (
+                      <label className={!allocation.executable ? "unavailable" : ""} key={allocation.key}>
+                        <span className="manual-market-heading">
+                          <strong>{allocation.label}</strong>
+                          <small className={`market-status market-status-${(allocation.marketState?.connection.status ?? "DISCONNECTED").toLowerCase()}`}>
+                            {allocation.executable ? "EXECUTABLE" : (allocation.marketState?.connection.status ?? "UNAVAILABLE")}
+                          </small>
+                        </span>
+                        <input
+                          aria-label={`${allocation.label} hedge quantity in BTC`}
+                          disabled={busy || hedgeOrdersCreated || !allocation.executable}
+                          inputMode="decimal"
+                          min="0"
+                          max={maximum}
+                          step="0.01"
+                          type="number"
+                          value={allocation.raw}
+                          onBlur={() => {
+                            if (allocation.raw !== "" && allocation.valid) {
+                              setManualAllocations((current) => ({
+                                ...current,
+                                [allocation.key]: allocation.quantity.toFixed(2),
+                              }));
+                            }
+                          }}
+                          onChange={(event) => {
+                            const nextValue = event.target.value;
+                            if (nextValue === "" || /^\d*(?:\.\d{0,2})?$/.test(nextValue)) {
+                              setManualAllocations((current) => ({ ...current, [allocation.key]: nextValue }));
+                              setManualPreview(null);
+                            }
+                          }}
+                        />
+                        <small className="allocation-limit">
+                          MAX {maximum.toFixed(2)} BTC · {allocation.instrumentType === "PERPETUAL" ? "BTC-EQUIVALENT" : "BASE ASSET"}
+                        </small>
+                      </label>
+                    );
+                  })}
                 </div>
                 {overHedgeQuantity > 0 && (
                   <p className="allocation-warning" role="alert">
@@ -939,77 +882,53 @@ export default function Home() {
                   <span>Projected <strong>{formatBtc(hedgeOutcomeDelta)}</strong></span>
                 </div>
                 <p className="demo-policy-note">
-                  RiskPolicy decides the advisory target and remaining requirement above; it does not choose Spot, Perp, or venue. Enter Spot and Perp quantities independently. A trader may intentionally differ from the policy output, while the existing manual safety control prevents crossing through flat. This is not a Hedge Optimizer recommendation. New client fills remain independent and can move projected delta while orders are working.
+                  RiskPolicy supplies the advisory target; the trader independently chooses venue and instrument. Partial hedging is allowed, but the allocation cannot cross flat. Every selected market is validated against current executable L2 before orders are created.
                 </p>
 
-                <div className={`market-candidate ${marketStatus !== "LIVE" ? "unavailable" : ""}`}>
-                  <div className="market-candidate-heading">
-                    <span>LIVE MARKET CANDIDATE · NOT OPTIMIZED</span>
-                    <strong>KRAKEN SPOT</strong>
-                  </div>
-                  {marketStatus === "LIVE" && liveBook ? (
-                    <div className="market-candidate-grid">
-                      <div><small>SIDE</small><strong className={spotHedgeSide === "BUY" ? "bid" : "ask"}>{spotHedgeSide}</strong></div>
-                      <div><small>MANUAL SPOT QTY</small><strong>{spotQuantityIsValid ? `${spotAllocationNumber.toFixed(2)} BTC` : "INVALID"}</strong></div>
-                      <div><small>BEST {spotHedgeSide === "BUY" ? "ASK" : "BID"} REFERENCE</small><strong>{spotReferencePrice === null ? "—" : formatUsd(spotReferencePrice)}</strong></div>
-                      <div><small>INDICATIVE NOTIONAL</small><strong>{spotQuantityIsValid && spotReferencePrice !== null ? formatCompactUsd(spotAllocationNumber * spotReferencePrice) : "—"}</strong></div>
+                {activeManualPreview && (
+                  <div className={`execution-preview ${activeManualPreview.can_submit ? "" : "unavailable"}`}>
+                    <div className="market-candidate-heading">
+                      <span>EXECUTABLE L2 PREVIEW · SNAPSHOT v{activeManualPreview.market_snapshot_version}</span>
+                      <strong>{activeManualPreview.can_submit ? "READY" : "BLOCKED"}</strong>
                     </div>
-                  ) : (
-                    <p>
-                      Live execution reference unavailable while Kraken is {marketStatus.toLowerCase()}.
-                      Simulated hedge accounting remains isolated from market connectivity.
-                    </p>
-                  )}
-                  <small className="candidate-disclaimer">
-                    Market reference only — no venue comparison, order routing, optimizer, recommendation, or real order submission.
-                  </small>
-                </div>
+                    <div className="execution-preview-legs">
+                      {activeManualPreview.legs.map((leg) => (
+                        <div key={`${leg.venue}:${leg.instrument_type}`}>
+                          <span><small>MARKET</small><strong>{leg.venue} {leg.instrument_type === "PERPETUAL" ? "PERP" : "SPOT"}</strong></span>
+                          <span><small>SIDE · EXECUTABLE</small><strong>{displayHedgeLegSide(leg.instrument_type, leg.side)} · {Number(leg.executable_quantity_btc).toFixed(2)} BTC</strong></span>
+                          <span><small>EXPECTED VWAP</small><strong>{leg.expected_vwap_usd ? formatUsd(Number(leg.expected_vwap_usd)) : "—"}</strong></span>
+                          <span><small>DEPTH IMPACT</small><strong>{leg.depth_impact_bps ? `${Number(leg.depth_impact_bps).toFixed(2)} bps` : "—"}</strong></span>
+                          <span><small>TAKER FEE</small><strong>{leg.expected_fee_usd ? formatSignedCompactUsd(Number(leg.expected_fee_usd)) : "—"}</strong></span>
+                          <span><small>ALL-IN COST</small><strong>{leg.expected_all_in_cost_usd ? formatSignedCompactUsd(Number(leg.expected_all_in_cost_usd)) : "—"}</strong></span>
+                        </div>
+                      ))}
+                    </div>
+                    {activeManualPreview.reason_codes.length > 0 && (
+                      <small className="candidate-disclaimer">{activeManualPreview.reason_codes.join(" · ").replaceAll("_", " ")}</small>
+                    )}
+                  </div>
+                )}
 
                 <div className="decision-actions">
                   <button
-                    className="primary-action"
+                    className={activeManualPreview ? "secondary-action" : "primary-action"}
                     disabled={busy || hedgeOrdersCreated || !validAllocation || demoHedgeQuantity === 0}
-                    onClick={handleCreateHedgeOrders}
+                    onClick={handlePreviewManualHedge}
                     type="button"
                   >
-                    CREATE HEDGE ORDERS
+                    {activeManualPreview ? "REFRESH L2 PREVIEW" : "PREVIEW EXECUTION"}
                   </button>
                   <button
-                    className="secondary-action"
-                    disabled={busy || !canReviseAllocation}
-                    onClick={handleCancelAndRevise}
+                    className="primary-action"
+                    disabled={busy || hedgeOrdersCreated || !activeManualPreview?.can_submit}
+                    onClick={handleExecuteManualHedge}
                     type="button"
                   >
-                    CANCEL &amp; EDIT ALLOCATION
+                    EXECUTE MANUAL PLAN
                   </button>
                 </div>
                   </div>
                 )}
-
-                <div className="simulation-controls">
-                  <div className="simulation-controls-heading">
-                    <strong>DEMO FILL CONTROLS</strong>
-                    <span>Temporary controls — future fills arrive from exchange execution reports.</span>
-                  </div>
-                  <div className="decision-actions">
-                    <button
-                      className="secondary-action"
-                      disabled={busy || !canSimulateHalfFill}
-                      onClick={handleHalfFills}
-                      type="button"
-                    >
-                      SIMULATE PARTIAL FILLS (~50%)
-                    </button>
-                    <button
-                      className="secondary-action"
-                      disabled={busy || !canFillRemainder}
-                      onClick={handleFillRemainder}
-                      type="button"
-                    >
-                      FILL REMAINDER
-                    </button>
-                  </div>
-                </div>
 
                 {allHedgeOrdersFilled && totalDelta === 0 && workingDelta === 0 && (
                   <div className="hedge-complete" role="status">
@@ -1107,25 +1026,37 @@ export default function Home() {
               <EmptyState title="No hedge orders" detail="Create a manual allocation after the client fill." />
             ) : (
               <div className="hedge-blotter">
-                {hedgeOrders.map((order) => (
-                  <div key={order.hedge_order_id}>
+                {hedgeOrders.map((order) => {
+                  const metrics = executionBatches
+                    .flatMap((batch) => batch.orders)
+                    .find((candidate) => candidate.hedge_order_id === order.hedge_order_id);
+                  return (
+                    <div className="blotter-order" key={order.hedge_order_id}>
+                      <span>
+                        <strong>{order.venue} · {order.instrument_type === "SPOT" ? "SPOT" : "PERP"} · {order.side}</strong>
+                        <small>{metrics?.execution_source ?? `${order.origin.replaceAll("_", " ")} · SIMULATED`}</small>
+                        {metrics?.realized_vwap_usd && (
+                          <small>VWAP {formatUsd(Number(metrics.realized_vwap_usd))} · FEE {formatSignedCompactUsd(Number(metrics.fee_usd))}</small>
+                        )}
+                      </span>
+                      <span className="blotter-progress">
+                        <strong>{formatQuantity(order.filled_quantity_btc)} / {formatQuantity(order.quantity_btc)} BTC</strong>
+                        <small className={order.status === "FILLED" ? "positive" : order.status === "CANCELLED" ? "negative" : "warning"}>{order.status.replace("_", " ")}</small>
+                        {metrics && <small>SLIP {formatSignedCompactUsd(Number(metrics.slippage_vs_expected_usd))} · IS {formatSignedCompactUsd(Number(metrics.implementation_shortfall_usd))}</small>}
+                      </span>
+                    </div>
+                  );
+                })}
+                {latestExecutionBatch && (
+                  <div className="fill-summary execution-batch-summary">
                     <span>
-                      <strong>{order.instrument_type === "SPOT" ? "SPOT" : "PERP"} · {order.side}</strong>
-                      <small>{order.venue} · {order.origin.replaceAll("_", " ")} · SIMULATED</small>
+                      <strong>LATEST EXECUTION · {latestExecutionBatch.status.replaceAll("_", " ")}</strong>
+                      <small>{Number(latestExecutionBatch.filled_quantity_btc).toFixed(2)} / {Number(latestExecutionBatch.requested_quantity_btc).toFixed(2)} BTC · VWAP {latestExecutionBatch.realized_vwap_usd ? formatUsd(Number(latestExecutionBatch.realized_vwap_usd)) : "—"}</small>
                     </span>
                     <span className="blotter-progress">
-                      <strong>{formatQuantity(order.filled_quantity_btc)} / {formatQuantity(order.quantity_btc)} BTC</strong>
-                      <small className={order.status === "FILLED" ? "positive" : order.status === "CANCELLED" ? "negative" : "warning"}>{order.status.replace("_", " ")}</small>
+                      <strong>{formatSignedCompactUsd(Number(latestExecutionBatch.all_in_cost_usd))} ALL-IN</strong>
+                      <small>SLIP {formatSignedCompactUsd(Number(latestExecutionBatch.slippage_vs_expected_usd))} · FEE {formatSignedCompactUsd(Number(latestExecutionBatch.fee_usd))} · IS {formatSignedCompactUsd(Number(latestExecutionBatch.implementation_shortfall_usd))}</small>
                     </span>
-                  </div>
-                ))}
-                {hedgeFills.length > 0 && (
-                  <div className="fill-summary">
-                    <span>
-                      <strong>EXECUTION LEDGER</strong>
-                      <small>{hedgeFills.length} immutable simulated fill{hedgeFills.length === 1 ? "" : "s"}</small>
-                    </span>
-                    <span className="positive">{formatQuantity(String(hedgeFills.reduce((sum, fill) => sum + Number(fill.quantity_btc), 0)))} BTC</span>
                   </div>
                 )}
               </div>

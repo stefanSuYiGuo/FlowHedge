@@ -68,6 +68,19 @@ from .market.models import (
 )
 from .risk import risk_service
 from .risk.models import RiskAssessment
+from .simulated_execution import simulated_execution_service
+from .simulated_execution.models import (
+    ExecutionBatchMetrics,
+    ExecutionBatchRequest,
+    ManualHedgePreview,
+    ManualHedgePreviewRequest,
+    ManualHedgeSubmission,
+    ManualHedgeSubmitRequest,
+)
+from .simulated_execution.service import (
+    ManualExecutionStateError,
+    ManualExecutionValidationError,
+)
 
 
 @asynccontextmanager
@@ -346,6 +359,7 @@ async def get_demo_workspace() -> AdvisoryWorkspaceState:
         hedge_orders=tuple(demo_service.archived_hedge_orders)
         + tuple(demo_service.hedge_orders.values()),
         hedge_fills=tuple(demo_service.hedge_fills),
+        execution_batches=simulated_execution_service.batch_metrics,
         events=tuple(demo_service.events[-100:]),
     )
 
@@ -390,7 +404,69 @@ async def reset_demo() -> DeskState:
     risk_service.reset()
     advisory_hedge_service.reset()
     auto_hedge_controller.reset()
+    simulated_execution_service.reset()
     return demo_service.desk_state
+
+
+@app.post(
+    "/demo/manual-hedges/preview",
+    response_model=ManualHedgePreview,
+    tags=["demo", "hedging", "execution"],
+)
+async def preview_manual_multi_venue_hedge(
+    request: ManualHedgePreviewRequest,
+) -> ManualHedgePreview:
+    """Price a trader-directed allocation against one atomic executable snapshot."""
+
+    try:
+        return await simulated_execution_service.preview(
+            request,
+            await risk_service.assess(),
+        )
+    except ManualExecutionValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except ManualExecutionStateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.post(
+    "/demo/manual-hedges/submit",
+    response_model=ManualHedgeSubmission,
+    tags=["demo", "hedging", "execution"],
+)
+async def submit_manual_multi_venue_hedge(
+    request: ManualHedgeSubmitRequest,
+) -> ManualHedgeSubmission:
+    """Turn an unexpired preview into auditable venue-specific HedgeOrders."""
+
+    try:
+        return await simulated_execution_service.submit(request.preview_id)
+    except (ManualExecutionStateError, DemoStateError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except (ManualExecutionValidationError, HedgeAllocationError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post(
+    "/demo/execution-batches/{batch_id}/execute",
+    response_model=ExecutionBatchMetrics,
+    tags=["demo", "hedging", "execution"],
+)
+async def execute_simulated_batch(
+    batch_id: str,
+    request: ExecutionBatchRequest,
+) -> ExecutionBatchMetrics:
+    """Sweep current L2, book simulated fills, and report realized execution metrics."""
+
+    try:
+        return await simulated_execution_service.execute_batch(
+            batch_id,
+            request.execution_id,
+        )
+    except ManualExecutionValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except ManualExecutionStateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.get(

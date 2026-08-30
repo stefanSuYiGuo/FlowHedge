@@ -41,6 +41,7 @@ from .domain.validation import validate_client_rfq_notional
 
 if TYPE_CHECKING:
     from .hedge_optimizer.models import HedgePlan
+    from .simulated_execution.models import ManualHedgePreview
 
 
 FIXED_REFERENCE_PRICE_USD = Decimal("118000")
@@ -100,6 +101,7 @@ class DemoTradingService:
         self.fixed_result: DemoScenarioResult | None = None
         self.saved_order_batch: HedgeOrderBatchResult | None = None
         self.system_plan_batches: dict[str, HedgeOrderBatchResult] = {}
+        self.manual_market_batches: dict[str, HedgeOrderBatchResult] = {}
         self.hedge_order_revision = 0
         self.client_flow_sequence = 0
         return self.desk_state
@@ -655,6 +657,134 @@ class DemoTradingService:
             origin=HedgeOrderOrigin.SYSTEM_ADVISORY,
         )
 
+    def create_manual_market_hedge_orders(
+        self,
+        preview: "ManualHedgePreview",
+    ) -> HedgeOrderBatchResult:
+        """Create venue-specific manual orders from a current executable preview."""
+
+        previous = self.manual_market_batches.get(preview.preview_id)
+        if previous is not None:
+            return previous.model_copy(update={"replayed": True})
+        if not preview.can_submit:
+            raise HedgeAllocationError("the manual execution preview is not executable")
+        if self.saved_result is None:
+            raise DemoStateError("book a client trade before creating hedge orders")
+
+        before = self.desk_state.model_copy(deep=True)
+        if before.version != preview.desk_state_version:
+            raise DemoStateError("the manual preview was generated for an older DeskState")
+        if any(
+            order.status in WORKING_HEDGE_ORDER_STATUSES
+            for order in self.hedge_orders.values()
+        ):
+            raise DemoStateError("working hedge orders already exist")
+
+        created_at = utc_now()
+        self.hedge_order_revision += 1
+        revision = self.hedge_order_revision
+        increasing_delta = preview.submitted_hedge_delta_btc > 0
+        created: list[HedgeOrder] = []
+        for index, leg in enumerate(preview.legs, start=1):
+            # Keep the Spot and Perpetual side namespaces explicit.
+            if leg.instrument_type is InstrumentType.SPOT:
+                side = HedgeSide.BUY if increasing_delta else HedgeSide.SELL
+            else:
+                side = HedgeSide.LONG if increasing_delta else HedgeSide.SHORT
+            created.append(
+                HedgeOrder(
+                    hedge_order_id=f"hedge-order-manual-{revision:03}-{index:02}",
+                    batch_id=preview.preview_id,
+                    origin=HedgeOrderOrigin.MANUAL,
+                    venue=leg.venue.value,
+                    instrument_id=leg.instrument_id,
+                    instrument_type=leg.instrument_type,
+                    side=side,
+                    quantity_btc=leg.requested_quantity_btc,
+                    filled_quantity_btc=Decimal("0"),
+                    remaining_quantity_btc=leg.requested_quantity_btc,
+                    status=HedgeOrderStatus.OPEN,
+                    created_at=created_at,
+                    created_desk_state_version=before.version,
+                    market_snapshot_version=preview.market_snapshot_version,
+                    expected_vwap_usd=leg.expected_vwap_usd,
+                    arrival_mid_usd=leg.arrival_mid_usd,
+                    expected_taker_fee_bps=leg.taker_fee_bps,
+                    expected_fee_usd=leg.expected_fee_usd,
+                    expected_price_cost_usd=leg.expected_price_cost_usd,
+                    expected_all_in_cost_usd=leg.expected_all_in_cost_usd,
+                )
+            )
+
+        self.hedge_orders.update({order.hedge_order_id: order for order in created})
+        working_orders = tuple(
+            order
+            for order in self.hedge_orders.values()
+            if order.status in WORKING_HEDGE_ORDER_STATUSES
+        )
+        working_delta = sum(
+            (
+                signed_hedge_delta(order.side, order.remaining_quantity_btc)
+                for order in working_orders
+            ),
+            Decimal("0"),
+        )
+        self.desk_state = DeskState(
+            version=before.version + 1,
+            as_of=created_at,
+            spot_inventory_btc=before.spot_inventory_btc,
+            derivative_delta_btc=before.derivative_delta_btc,
+            total_delta_btc=before.total_delta_btc,
+            open_hedge_order_ids=tuple(order.hedge_order_id for order in working_orders),
+            working_order_delta_btc=working_delta,
+        )
+        events: list[Event] = []
+        for order in created:
+            events.append(
+                self._event(
+                    EventType.HEDGE_ORDER_CREATED,
+                    order.hedge_order_id,
+                    preview.preview_id,
+                    before.version,
+                    self.desk_state.version,
+                    {
+                        "venue": order.venue,
+                        "instrument_type": order.instrument_type,
+                        "side": order.side,
+                        "quantity_btc": order.quantity_btc,
+                        "origin": order.origin,
+                        "market_snapshot_version": preview.market_snapshot_version,
+                    },
+                )
+            )
+        events.append(
+            self._position_event(
+                preview.preview_id,
+                before.version,
+                self.desk_state.version,
+                reason="MANUAL_MULTI_VENUE_ORDERS_REGISTERED",
+            )
+        )
+        result = HedgeOrderBatchResult(
+            replayed=False,
+            batch_id=preview.preview_id,
+            demo_target_total_delta_btc=(
+                preview.advisory_target_delta_btc
+                if preview.advisory_target_delta_btc is not None
+                else before.total_delta_btc + working_delta
+            ),
+            required_hedge_delta_btc=-before.total_delta_btc,
+            submitted_hedge_delta_btc=working_delta,
+            projected_total_delta_btc=before.total_delta_btc + working_delta,
+            orders=tuple(created),
+            desk_state_before=before,
+            desk_state_after=self.desk_state,
+            events=tuple(events),
+        )
+        self.manual_market_batches[preview.preview_id] = result
+        self.saved_order_batch = result
+        return result
+
     def create_auto_risk_hedge_orders(
         self,
         plan: "HedgePlan",
@@ -997,6 +1127,14 @@ class DemoTradingService:
         hedge_order_id: str,
         quantity_btc: Decimal,
         hedge_fill_id: str,
+        *,
+        fill_price_usd: Decimal | None = None,
+        execution_source: str | None = None,
+        market_snapshot_version: int | None = None,
+        arrival_mid_usd: Decimal | None = None,
+        expected_vwap_usd: Decimal | None = None,
+        taker_fee_bps: Decimal | None = None,
+        fee_usd: Decimal | None = None,
     ) -> HedgeFillResult:
         """Apply one idempotent simulated fill to an existing hedge order."""
 
@@ -1025,6 +1163,38 @@ class DemoTradingService:
             )
 
         filled_at = utc_now()
+        realized_price = fill_price_usd or self._fixed_hedge_fill_price(order)
+        expected_price = expected_vwap_usd or order.expected_vwap_usd
+        arrival_mid = arrival_mid_usd or order.arrival_mid_usd
+        increasing_delta = order.side in {HedgeSide.BUY, HedgeSide.LONG}
+        slippage_vs_expected = (
+            (
+                (realized_price - expected_price)
+                if increasing_delta
+                else (expected_price - realized_price)
+            )
+            * quantity_btc
+            if expected_price is not None
+            else None
+        )
+        implementation_shortfall = (
+            (
+                (realized_price - arrival_mid)
+                if increasing_delta
+                else (arrival_mid - realized_price)
+            )
+            * quantity_btc
+            if arrival_mid is not None
+            else None
+        )
+        fill_fee = fee_usd
+        if fill_fee is None and taker_fee_bps is not None:
+            fill_fee = realized_price * quantity_btc * taker_fee_bps / Decimal("10000")
+        all_in_cost = (
+            implementation_shortfall + (fill_fee or Decimal("0"))
+            if implementation_shortfall is not None
+            else None
+        )
         fill = HedgeFill(
             hedge_fill_id=hedge_fill_id,
             hedge_order_id=order.hedge_order_id,
@@ -1032,9 +1202,19 @@ class DemoTradingService:
             instrument_type=order.instrument_type,
             side=order.side,
             quantity_btc=quantity_btc,
-            fill_price_usd=self._fixed_hedge_fill_price(order),
+            fill_price_usd=realized_price,
             filled_at=filled_at,
-            execution_source="FIXED_STEP_4_SIMULATION",
+            execution_source=execution_source or "FIXED_STEP_4_SIMULATION",
+            venue=order.venue,
+            market_snapshot_version=market_snapshot_version,
+            arrival_mid_usd=arrival_mid,
+            expected_vwap_usd=expected_price,
+            filled_notional_usd=realized_price * quantity_btc,
+            taker_fee_bps=taker_fee_bps,
+            fee_usd=fill_fee,
+            slippage_vs_expected_usd=slippage_vs_expected,
+            implementation_shortfall_usd=implementation_shortfall,
+            all_in_cost_usd=all_in_cost,
         )
 
         new_filled_quantity = order.filled_quantity_btc + quantity_btc
@@ -1089,6 +1269,10 @@ class DemoTradingService:
                     "side": fill.side,
                     "quantity_btc": fill.quantity_btc,
                     "fill_price_usd": fill.fill_price_usd,
+                    "venue": fill.venue,
+                    "execution_source": fill.execution_source,
+                    "fee_usd": fill.fee_usd,
+                    "implementation_shortfall_usd": fill.implementation_shortfall_usd,
                 },
             ),
             self._event(

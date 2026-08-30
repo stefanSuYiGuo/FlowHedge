@@ -216,6 +216,22 @@ button:disabled { opacity: .45; cursor: not-allowed !important; }
 .manual-override-heading { margin-bottom: 8px; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .manual-override-heading strong { color: var(--warning); font-size: 8px; letter-spacing: .09em; }
 .manual-override-heading span { color: var(--muted); font-size: 8px; text-align: right; }
+.manual-market-allocation { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.manual-market-allocation label { min-width: 0; padding: 8px; background: #07131c; border: 1px solid var(--border); }
+.manual-market-allocation label.unavailable { opacity: .55; }
+.manual-market-allocation.locked input { color: var(--muted-strong); background: #091720; }
+.manual-market-heading { min-height: 20px; margin-bottom: 5px; display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.manual-market-heading strong { font-size: 8px; letter-spacing: .05em; }
+.manual-market-heading .market-status { font-size: 6px; }
+.manual-market-allocation input { width: 100%; height: 35px; padding: 0 9px; color: var(--ink); background: #06121a; border: 1px solid var(--border-strong); border-radius: 0; outline: none; font: 10px var(--font-geist-mono), monospace; }
+.manual-market-allocation input:focus { border-color: var(--accent); }
+.execution-preview { margin-top: 10px; padding: 10px; background: #071a19; border: 1px solid #176d5d; }
+.execution-preview.unavailable { background: #11191e; border-color: var(--border-strong); }
+.execution-preview-legs { margin-top: 8px; border: 1px solid var(--border); }
+.execution-preview-legs > div { padding: 7px; display: grid; grid-template-columns: 1.15fr 1.1fr 1fr .8fr .8fr .85fr; gap: 7px; border-bottom: 1px solid var(--border); }
+.execution-preview-legs > div:last-child { border-bottom: 0; }
+.execution-preview-legs small { display: block; color: var(--muted); font-size: 6px; letter-spacing: .05em; }
+.execution-preview-legs strong { display: block; margin-top: 3px; overflow: hidden; font: 700 8px var(--font-geist-mono), monospace; white-space: nowrap; text-overflow: ellipsis; }
 .allocation-controls { display: grid; grid-template-columns: 1fr 1fr 1.25fr; gap: 9px; }
 .allocation-controls label > span { display: block; margin-bottom: 5px; color: var(--muted); font-size: 8px; font-weight: 750; letter-spacing: .07em; }
 .allocation-controls input, .allocation-controls select { width: 100%; height: 35px; padding: 0 9px; color: var(--ink); background: #06121a; border: 1px solid var(--border-strong); border-radius: 0; outline: none; font: 10px var(--font-geist-mono), monospace; }
@@ -301,6 +317,8 @@ button:disabled { opacity: .45; cursor: not-allowed !important; }
 .hedge-blotter small { display: block; margin-top: 4px; color: var(--muted); }
 .blotter-progress { text-align: right; }
 .hedge-blotter > .fill-summary { margin-top: 3px; padding-top: 10px; color: var(--accent); border-top: 1px solid var(--border-strong); border-bottom: 0; }
+.hedge-blotter > .blotter-order { align-items: flex-start; }
+.execution-batch-summary { align-items: flex-start !important; }
 .terminal-footer { min-height: 27px; padding: 6px 12px; display: flex; justify-content: space-between; color: var(--muted); background: #061019; border-top: 1px solid var(--border-strong); font-size: 8px; letter-spacing: .06em; }
 
 @media (max-width: 1000px) {
@@ -321,7 +339,7 @@ button:disabled { opacity: .45; cursor: not-allowed !important; }
   .mode-controls { width: 100%; }
   .mode-controls button { flex: 1; }
   .desk-strip { grid-template-columns: repeat(2, 1fr); }
-  .quote-section, .allocation-controls, .market-candidate-grid, .hedge-plan-leg { grid-template-columns: 1fr; }
+  .quote-section, .allocation-controls, .market-candidate-grid, .hedge-plan-leg, .manual-market-allocation, .execution-preview-legs > div { grid-template-columns: 1fr; }
   .quote-prices { border-right: 0; border-bottom: 1px solid var(--border); }
   .recommendation-grid, .plan-summary-grid, .plan-economics, .auto-risk-summary, .auto-execution-progress { grid-template-columns: repeat(2, 1fr); }
   .active-rfq { align-items: flex-start; flex-direction: column; }
