@@ -646,7 +646,7 @@ export default function Home() {
             grow
           >
             <div className="rfq-list">
-              {pendingRfqs.map((pending) => (
+              {[...pendingRfqs].reverse().map((pending) => (
                 <div className="rfq-card active incoming-rfq" key={pending.rfq.rfq_id}>
                   <span className={`rfq-side ${pending.rfq.client_side === "BUY" ? "bid" : "ask"}`}>
                     {pending.rfq.client_side}
@@ -657,7 +657,7 @@ export default function Home() {
                   <time>{formatTime(pending.rfq.received_at)}</time>
                 </div>
               ))}
-              {[...completedScenarios].reverse().slice(0, 6).map((completed) => (
+              {[...completedScenarios].reverse().map((completed) => (
                 <div className="rfq-card" key={completed.rfq.rfq_id}>
                   <span className={`rfq-side ${completed.rfq.client_side === "BUY" ? "bid" : "ask"}`}>
                     {completed.rfq.client_side}

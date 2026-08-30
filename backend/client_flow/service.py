@@ -116,7 +116,7 @@ class ClientFlowSimulator:
         return ClientFlowState(
             active=self.active,
             pending_rfqs=tuple(self.pending_rfqs),
-            completed_scenarios=tuple(self.trading_service.completed_scenarios[-20:]),
+            completed_scenarios=tuple(self.trading_service.completed_scenarios),
             completed_count=len(self.trading_service.completed_scenarios),
         )
 

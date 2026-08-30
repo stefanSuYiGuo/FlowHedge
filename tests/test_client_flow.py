@@ -153,6 +153,20 @@ def test_new_client_trade_can_arrive_before_prior_exposure_is_hedged() -> None:
     assert trading.hedge_orders == {}
 
 
+def test_client_flow_state_exposes_the_full_session_rfq_history() -> None:
+    async def exercise():
+        trading = DemoTradingService()
+        result = trading.run_fixed_client_trade()
+        trading.completed_scenarios = [result] * 25
+        flow = ClientFlowSimulator(InMemoryMarketStateStore(), trading)
+        return flow.state()
+
+    state = run(exercise())
+
+    assert state.completed_count == 25
+    assert len(state.completed_scenarios) == 25
+
+
 def test_reset_during_pricing_discards_the_pending_trade() -> None:
     async def exercise():
         store = await live_fixture_store()
