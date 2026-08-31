@@ -14,10 +14,11 @@ from backend.domain.models import (
     MarketObservation,
     MarketSnapshot,
 )
-from backend.market.book import KrakenOrderBookBuilder
+from backend.market.book import KrakenOrderBookBuilder, normalized_books_from_levels
 from backend.market.kraken import BOOK_DEPTH, CANONICAL_SYMBOL, KRAKEN_SPOT_WS_ENDPOINT
-from backend.market.models import MarketConnectionStatus, MarketVenue
+from backend.market.models import InstrumentRules, MarketConnectionStatus, MarketVenue
 from backend.market.store import InMemoryMarketStateStore
+from backend.pricing.engine import price_client_rfq
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -50,10 +51,33 @@ async def live_fixture_store() -> InMemoryMarketStateStore:
     fixture = json.loads(
         (FIXTURES / "kraken_book_snapshot.json").read_text()
     )["data"][0]
-    book = KrakenOrderBookBuilder(depth=BOOK_DEPTH).apply_snapshot(
+    source_book = KrakenOrderBookBuilder(depth=BOOK_DEPTH).apply_snapshot(
         fixture, received_at=datetime.now(timezone.utc)
     )
-    await store.replace_book(book)
+    rules = InstrumentRules(
+        venue=MarketVenue.KRAKEN,
+        symbol=CANONICAL_SYMBOL,
+        venue_symbol="BTC/USD",
+        instrument_type=InstrumentType.SPOT,
+        base_asset="BTC",
+        quote_asset="USD",
+        price_increment=Decimal("0.1"),
+        quantity_increment=Decimal("0.00000001"),
+        quantity_min=Decimal("0.0001"),
+        price_precision=1,
+        quantity_precision=8,
+        status="ONLINE",
+        received_at=datetime.now(timezone.utc),
+    )
+    book, executable_book = normalized_books_from_levels(
+        rules=rules,
+        bids=((level.price, level.quantity * 20) for level in source_book.bids),
+        asks=((level.price, level.quantity * 20) for level in source_book.asks),
+        exchange_timestamp=source_book.exchange_timestamp,
+        received_at=datetime.now(timezone.utc),
+    )
+    await store.replace_instrument(rules)
+    await store.replace_books(book, executable_book)
     await store.update_connection(
         "kraken-public-spot",
         status=MarketConnectionStatus.LIVE,
@@ -95,14 +119,11 @@ def test_flow_exposes_pricing_then_auto_accepts_and_books_trade() -> None:
     assert result is not None
     assert result.rfq.status == "FILLED"
     assert result.quote.status == "ACCEPTED"
-    assert result.quote.pricing_source == "DEMO_KRAKEN_TOUCH_AUTO_ACCEPT"
+    assert result.quote.pricing_source == "EXECUTABLE_MULTI_VENUE_L2_V1_AUTO_ACCEPT"
+    assert result.pricing_result is not None
+    assert result.quote.pricing_result_id == result.pricing_result.pricing_result_id
     assert result.rfq.validated_notional_usd > Decimal("500000")
-    expected_quote = (
-        result.market_snapshot.observations[0].ask
-        if result.rfq.client_side is ClientSide.BUY
-        else result.market_snapshot.observations[0].bid
-    )
-    assert result.quote.quoted_price_usd == expected_quote
+    assert result.quote.quoted_price_usd == result.pricing_result.final_quote_price_usd
     expected_delta = (
         -result.rfq.quantity_btc
         if result.rfq.client_side is ClientSide.BUY
@@ -266,7 +287,15 @@ def test_completed_hedge_batch_does_not_block_the_next_manual_batch() -> None:
         quantity_btc=Decimal("6"),
         client_id="INST-NEXT",
     )
-    service.complete_generated_client_rfq(pending)
+    pricing_store = run(live_fixture_store())
+    pricing_snapshot = run(pricing_store.executable_snapshot("BTC"))
+    pricing_result = price_client_rfq(
+        rfq_id=pending.rfq.rfq_id,
+        client_side=pending.rfq.client_side,
+        quantity_btc=pending.rfq.quantity_btc,
+        snapshot=pricing_snapshot,
+    )
+    service.complete_generated_client_rfq(pending, pricing_result)
 
     second_batch = service.create_manual_hedge_orders(
         Decimal("2.50"), Decimal("3.50"), "batch-two"

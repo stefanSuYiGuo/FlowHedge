@@ -732,11 +732,41 @@ export default function Home() {
                   </div>
                   <div className="quote-breakdown">
                     <span className="eyebrow">Quote provenance</span>
-                    <LineItem label="Reference price" value={formatUsd(Number(scenario.market_snapshot.reference_price_usd))} />
+                    <LineItem label="Reference price" value={formatUsd(Number(scenario.pricing_result?.reference_mid_usd ?? scenario.market_snapshot.reference_price_usd))} />
                     <LineItem label="Quote revision" value={`R${scenario.quote.revision}`} />
                     <LineItem label="Desk state used" value={`v${scenario.quote.desk_state_version}`} />
                     <LineItem label="Pricing source" value={formatPricingSource(scenario.quote.pricing_source)} />
                   </div>
+                  {scenario.pricing_result && (
+                    <div className="pricing-economics">
+                      <div className="pricing-economics-heading">
+                        <div>
+                          <span className="eyebrow">Executable pricing economics</span>
+                          <strong>MULTI-VENUE SPOT L2 · SNAPSHOT v{scenario.pricing_result.market_snapshot_version}</strong>
+                        </div>
+                        <span className="pricing-model-status">{scenario.pricing_result.status}</span>
+                      </div>
+                      <div className="pricing-economics-grid">
+                        <span><small>REFERENCE MID</small><strong>{formatUsd(Number(scenario.pricing_result.reference_mid_usd))}</strong></span>
+                        <span><small>REPLACEMENT VWAP</small><strong>{formatUsd(Number(scenario.pricing_result.executable_replacement_vwap_usd))}</strong></span>
+                        <span><small>MARKET IMPACT</small><strong>{formatSignedBps(scenario.pricing_result.expected_market_impact_bps)} · {formatSignedCompactUsd(Number(scenario.pricing_result.expected_market_impact_usd))}</strong></span>
+                        <span><small>EXPECTED FEE</small><strong>{formatOptionalBps(scenario.pricing_result.expected_fee_bps)} · {formatSignedCompactUsd(Number(scenario.pricing_result.expected_fee_usd))}</strong></span>
+                        <span><small>CLIENT MARGIN</small><strong>{formatOptionalBps(scenario.pricing_result.client_margin_bps)} · {formatSignedCompactUsd(Number(scenario.pricing_result.client_margin_usd))}</strong></span>
+                        <span><small>EXPECTED GROSS EDGE</small><strong className="positive">{formatSignedCompactUsd(Number(scenario.pricing_result.expected_gross_edge_usd))}</strong></span>
+                      </div>
+                      <div className="pricing-liquidity-basis">
+                        <span>PRICING VENUE BASIS</span>
+                        <div>
+                          {scenario.pricing_result.liquidity_legs.map((leg) => (
+                            <strong key={`${leg.venue}:${leg.instrument_id}`}>
+                              {leg.venue} SPOT {formatQuantity(leg.quantity_btc)} BTC @ {formatUsd(Number(leg.execution_vwap_usd))}
+                            </strong>
+                          ))}
+                        </div>
+                      </div>
+                      <p className="pricing-economics-disclosure">{scenario.pricing_result.economics_disclosure}</p>
+                    </div>
+                  )}
                 </div>
               </>
             ) : (
@@ -1267,7 +1297,7 @@ function SystemRecommendation({
             <strong>WHY THIS HEDGE?</strong>
             {optimizerExplanationLines(recommendation).length > 0 ? (
               <ul>
-                {optimizerExplanationLines(recommendation).map((line) => <li key={line}>{line}</li>)}
+                {optimizerExplanationLines(recommendation).map((line, index) => <li key={`${index}:${line}`}>{line}</li>)}
               </ul>
             ) : (
               <p>No eligible allocation facts were produced.</p>
@@ -1402,7 +1432,9 @@ function describeEvent(event: FlowEvent): string {
     case "RFQ_VALIDATED":
       return `${formatCompactUsd(payloadNumber(event, "notional_usd"))} · notional > $500K`;
     case "QUOTE_GENERATED":
-      return `Client quote ${formatUsd(payloadNumber(event, "quoted_price_usd"))}`;
+      return `Client quote ${formatUsd(payloadNumber(event, "quoted_price_usd"))} · executable Spot L2`;
+    case "QUOTE_PRICING_FAILED":
+      return `Quote withheld · ${String(event.payload.status_reason).replaceAll("_", " ")}`;
     case "QUOTE_ACCEPTED":
       return "AUTO_ACCEPT · no client decision model";
     case "CLIENT_FILL":
@@ -1467,9 +1499,18 @@ function clientTradeDescription(scenario: DemoScenarioResult): string {
 }
 
 function formatPricingSource(source: string): string {
+  if (source === "EXECUTABLE_MULTI_VENUE_L2_V1_AUTO_ACCEPT") {
+    return "MULTI-VENUE SPOT L2 v1";
+  }
   return source === "DEMO_KRAKEN_TOUCH_AUTO_ACCEPT"
     ? "DEMO KRAKEN TOUCH"
     : source.replaceAll("_", " ");
+}
+
+function formatSignedBps(value: string | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  const numeric = Number(value);
+  return `${numeric >= 0 ? "+" : ""}${numeric.toFixed(2)} bps`;
 }
 
 function signedHedgeOrderQuantity(order: HedgeOrder): number {

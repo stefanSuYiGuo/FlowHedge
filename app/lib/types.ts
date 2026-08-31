@@ -170,6 +170,71 @@ export interface RFQ {
   validated_notional_usd: string;
 }
 
+export type PricingStatus =
+  | "OK"
+  | "NO_ELIGIBLE_SPOT_MARKETS"
+  | "INSUFFICIENT_LIQUIDITY"
+  | "INVALID_REQUEST";
+
+export interface PricingAdjustment {
+  adjustment_type:
+    | "EXPECTED_TAKER_FEE"
+    | "BASE_CLIENT_MARGIN"
+    | "CLIENT_PRICE_ROUNDING"
+    | "INVENTORY_SKEW";
+  amount_bps: string | null;
+  amount_usd: string;
+  assumption_label: string;
+}
+
+export interface PricingLiquidityLeg {
+  venue: string;
+  instrument_id: string;
+  instrument_type: "SPOT" | "PERPETUAL";
+  quantity_btc: string;
+  execution_vwap_usd: string;
+  executed_notional_usd: string;
+  expected_taker_fee_bps: string;
+  expected_fee_usd: string;
+  usd_conversion_rate: string;
+  usd_conversion_assumption: string;
+}
+
+export interface PricingResult {
+  pricing_result_id: string;
+  request_id: string;
+  rfq_id: string;
+  model_version: string;
+  status: PricingStatus;
+  status_reason: string | null;
+  client_side: ClientSide;
+  requested_quantity_btc: string;
+  priced_quantity_btc: string;
+  unpriced_quantity_btc: string;
+  market_snapshot_version: number;
+  snapshot_captured_at: string;
+  reference_mid_usd: string | null;
+  reference_source: string;
+  executable_replacement_vwap_usd: string | null;
+  executed_notional_usd: string;
+  expected_market_impact_bps: string | null;
+  expected_market_impact_usd: string | null;
+  expected_fee_bps: string | null;
+  expected_fee_usd: string;
+  client_margin_bps: string;
+  client_margin_usd: string;
+  rounding_adjustment_usd: string;
+  expected_gross_edge_usd: string | null;
+  final_quote_price_usd: string | null;
+  client_price_increment_usd: string;
+  quote_validity_seconds: number;
+  assumption_label: string;
+  economics_disclosure: string;
+  liquidity_legs: PricingLiquidityLeg[];
+  adjustments: PricingAdjustment[];
+  excluded_markets: string[];
+}
+
 export interface Quote {
   quote_id: string;
   rfq_id: string;
@@ -182,6 +247,7 @@ export interface Quote {
   market_snapshot_id: string;
   desk_state_version: number;
   pricing_source: string;
+  pricing_result_id: string | null;
 }
 
 export interface ClientTrade {
@@ -276,6 +342,7 @@ export interface DemoScenarioResult {
   desk_state_before: DeskState;
   desk_state_after: DeskState;
   events: FlowEvent[];
+  pricing_result: PricingResult | null;
 }
 
 export interface PendingClientFlow {

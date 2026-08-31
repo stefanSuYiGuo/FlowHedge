@@ -57,7 +57,21 @@ class StablecoinQuoteConfig(BaseModel):
     usdc_assumption_label: str = "USDC_USD_1_TO_1_DEMO"
 
 
+class PricingConfig(BaseModel):
+    """Explicit Step 12 RFQ pricing assumptions for the interview demo."""
+
+    model_config = ConfigDict(frozen=True)
+
+    model_version: str = "EXECUTABLE_MULTI_VENUE_SPOT_L2_V1"
+    assumption_label: str = "DEMO PRICING ASSUMPTION"
+    base_client_margin_bps: Decimal = Field(default=Decimal("5.0"), ge=0)
+    client_price_increment_usd: Decimal = Field(default=Decimal("0.10"), gt=0)
+    quote_validity_seconds: int = Field(default=5, gt=0)
+    reference_source: str = "ELIGIBLE_SPOT_MEDIAN"
+
+
 client_flow_config = ClientFlowConfig()
 risk_policy_config = RiskPolicyConfig()
 demo_desk_config = DemoDeskConfig()
 stablecoin_quote_config = StablecoinQuoteConfig()
+pricing_config = PricingConfig()

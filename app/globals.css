@@ -156,6 +156,19 @@ button:disabled { opacity: .45; cursor: not-allowed !important; }
 .line-item { padding: 5px 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted-strong); font-size: 10px; border-bottom: 1px solid #142532; }
 .line-item:last-child { border-bottom: 0; }
 .line-item strong { color: var(--ink); font: 650 10px var(--font-geist-mono), monospace; }
+.pricing-economics { grid-column: 1 / -1; padding: 12px 14px; border-top: 1px solid var(--border); background: #07131c; }
+.pricing-economics-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.pricing-economics-heading strong { display: block; margin-top: 4px; font: 750 10px var(--font-geist-mono), monospace; }
+.pricing-model-status { padding: 3px 6px; color: var(--positive); border: 1px solid #176d5d; font: 800 8px var(--font-geist-mono), monospace; letter-spacing: .06em; }
+.pricing-economics-grid { margin-top: 9px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.pricing-economics-grid > span { min-width: 0; padding: 8px; background: #061019; border: 1px solid var(--border); }
+.pricing-economics-grid small { display: block; color: var(--muted); font-size: 8px; letter-spacing: .05em; }
+.pricing-economics-grid strong { display: block; margin-top: 4px; overflow-wrap: anywhere; font: 700 10px/1.35 var(--font-geist-mono), monospace; }
+.pricing-liquidity-basis { margin-top: 8px; display: grid; grid-template-columns: auto 1fr; align-items: start; gap: 10px; color: var(--muted); font-size: 8px; }
+.pricing-liquidity-basis > span { padding-top: 4px; letter-spacing: .06em; white-space: nowrap; }
+.pricing-liquidity-basis > div { display: flex; flex-wrap: wrap; gap: 5px; }
+.pricing-liquidity-basis strong { padding: 3px 5px; color: var(--muted-strong); border: 1px solid var(--border); font: 650 8px var(--font-geist-mono), monospace; }
+.pricing-economics-disclosure { margin: 8px 0 0; color: var(--warning); font: 750 8px/1.45 var(--font-geist-mono), monospace; letter-spacing: .04em; }
 
 .empty-state { min-height: 74px; padding: 16px 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; text-align: center; color: var(--muted); }
 .empty-state.roomy { min-height: 178px; }
@@ -347,6 +360,8 @@ button:disabled { opacity: .45; cursor: not-allowed !important; }
   .desk-strip { grid-template-columns: repeat(2, 1fr); }
   .quote-section, .allocation-controls, .market-candidate-grid, .hedge-plan-leg, .manual-market-allocation, .execution-preview-legs > div { grid-template-columns: 1fr; }
   .quote-prices { border-right: 0; border-bottom: 1px solid var(--border); }
+  .pricing-economics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pricing-liquidity-basis { grid-template-columns: 1fr; }
   .recommendation-grid, .plan-summary-grid, .plan-economics, .auto-risk-summary, .auto-execution-progress { grid-template-columns: repeat(2, 1fr); }
   .active-rfq { align-items: flex-start; flex-direction: column; }
   .flow-controls { grid-template-columns: 1fr 1fr; }

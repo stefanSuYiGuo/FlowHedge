@@ -32,6 +32,8 @@ from .domain.models import (
     MarketObservation,
     MarketSnapshot,
     PendingClientFlow,
+    PricingResult,
+    PricingStatus,
     Quote,
     QuoteStatus,
     RFQ,
@@ -361,9 +363,9 @@ class DemoTradingService:
         )
 
     def complete_generated_client_rfq(
-        self, pending: PendingClientFlow
+        self, pending: PendingClientFlow, pricing_result: PricingResult
     ) -> DemoScenarioResult:
-        """Quote at the captured Kraken touch, auto-accept, and book one client fill."""
+        """Publish one valid L2-derived quote, auto-accept, and book its client fill."""
 
         if any(
             scenario.rfq.rfq_id == pending.rfq.rfq_id
@@ -371,24 +373,32 @@ class DemoTradingService:
         ):
             raise DemoStateError(f"RFQ already completed: {pending.rfq.rfq_id}")
 
-        observation = pending.market_snapshot.observations[0]
-        quoted_price = (
-            observation.ask
-            if pending.rfq.client_side is ClientSide.BUY
-            else observation.bid
-        )
+        if pricing_result.status is not PricingStatus.OK:
+            raise DemoStateError("cannot complete an RFQ without successful pricing")
+        if (
+            pricing_result.rfq_id != pending.rfq.rfq_id
+            or pricing_result.client_side is not pending.rfq.client_side
+            or pricing_result.requested_quantity_btc != pending.rfq.quantity_btc
+            or pricing_result.final_quote_price_usd is None
+        ):
+            raise DemoStateError("pricing result does not match the pending RFQ")
+
         quote = Quote(
             quote_id=f"quote-{pending.rfq.rfq_id}-r1",
             rfq_id=pending.rfq.rfq_id,
             revision=1,
-            quoted_price_usd=quoted_price,
+            quoted_price_usd=pricing_result.final_quote_price_usd,
             quantity_btc=pending.rfq.quantity_btc,
             created_at=utc_now(),
-            expires_at=utc_now() + timedelta(seconds=5),
+            expires_at=utc_now()
+            + timedelta(seconds=pricing_result.quote_validity_seconds),
             status=QuoteStatus.ACTIVE,
-            market_snapshot_id=pending.market_snapshot.market_snapshot_id,
+            market_snapshot_id=(
+                f"executable-market-v{pricing_result.market_snapshot_version}"
+            ),
             desk_state_version=self.desk_state.version,
-            pricing_source="DEMO_KRAKEN_TOUCH_AUTO_ACCEPT",
+            pricing_source="EXECUTABLE_MULTI_VENUE_L2_V1_AUTO_ACCEPT",
+            pricing_result_id=pricing_result.pricing_result_id,
         )
         before = self.desk_state.model_copy(deep=True)
         scenario_events = [
@@ -406,6 +416,17 @@ class DemoTradingService:
                 {
                     "quoted_price_usd": quote.quoted_price_usd,
                     "pricing_source": quote.pricing_source,
+                    "pricing_result_id": pricing_result.pricing_result_id,
+                    "market_snapshot_version": pricing_result.market_snapshot_version,
+                    "reference_mid_usd": pricing_result.reference_mid_usd,
+                    "executable_replacement_vwap_usd": (
+                        pricing_result.executable_replacement_vwap_usd
+                    ),
+                    "expected_fee_usd": pricing_result.expected_fee_usd,
+                    "client_margin_usd": pricing_result.client_margin_usd,
+                    "expected_gross_edge_usd": (
+                        pricing_result.expected_gross_edge_usd
+                    ),
                 },
             )
         )
@@ -470,6 +491,7 @@ class DemoTradingService:
             desk_state_before=before,
             desk_state_after=self.desk_state,
             events=tuple(scenario_events),
+            pricing_result=pricing_result,
         )
         self.saved_result = result
         self.completed_scenarios.append(result)

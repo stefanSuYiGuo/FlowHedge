@@ -12,14 +12,17 @@ from ..domain.models import (
     ClientFlowState,
     ClientSide,
     DemoScenarioResult,
+    EventType,
     MarketObservation,
     MarketSnapshot,
     PendingClientFlow,
+    PricingStatus,
 )
 from ..domain.validation import validate_client_rfq_notional
 from ..market.models import MarketConnectionStatus, MarketVenue
 from ..market.service import market_state_store
 from ..market.store import InMemoryMarketStateStore
+from ..pricing.engine import price_client_rfq
 
 
 SLOW_FLOW_MIN_SECONDS = 75
@@ -123,7 +126,7 @@ class ClientFlowSimulator:
     async def generate_once(
         self, *, pricing_delay_seconds: float = PRICING_ACCEPTANCE_DELAY_SECONDS
     ) -> Optional[DemoScenarioResult]:
-        """Generate one RFQ from the latest valid Kraken book, then auto-accept it."""
+        """Generate one executable RFQ, price current Spot L2, then auto-accept it."""
 
         async with self._generation_lock:
             market = await self.market_store.view(MarketVenue.KRAKEN, "BTC-USD")
@@ -138,6 +141,16 @@ class ClientFlowSimulator:
             quantity = generate_rfq_quantity(book.mid_price, self.rng)
             side = self.rng.choice((ClientSide.BUY, ClientSide.SELL))
             next_sequence = self.trading_service.client_flow_sequence + 1
+            next_rfq_id = f"rfq-flow-{next_sequence:04}"
+            preflight_snapshot = await self.market_store.executable_snapshot("BTC")
+            preflight = price_client_rfq(
+                rfq_id=next_rfq_id,
+                client_side=side,
+                quantity_btc=quantity,
+                snapshot=preflight_snapshot,
+            )
+            if preflight.status is not PricingStatus.OK:
+                return None
             captured_at = utc_now()
             snapshot = MarketSnapshot(
                 market_snapshot_id=f"market-flow-{next_sequence:04}",
@@ -168,7 +181,32 @@ class ClientFlowSimulator:
                 await self.sleep(pricing_delay_seconds)
                 if epoch != self._generation_epoch:
                     return None
-                return self.trading_service.complete_generated_client_rfq(pending)
+                pricing_snapshot = await self.market_store.executable_snapshot("BTC")
+                pricing_result = price_client_rfq(
+                    rfq_id=pending.rfq.rfq_id,
+                    client_side=pending.rfq.client_side,
+                    quantity_btc=pending.rfq.quantity_btc,
+                    snapshot=pricing_snapshot,
+                )
+                if pricing_result.status is not PricingStatus.OK:
+                    self.trading_service.record_system_event(
+                        EventType.QUOTE_PRICING_FAILED,
+                        aggregate_id=pending.rfq.rfq_id,
+                        correlation_id=pending.correlation_id,
+                        payload={
+                            "pricing_status": pricing_result.status,
+                            "status_reason": pricing_result.status_reason,
+                            "priced_quantity_btc": pricing_result.priced_quantity_btc,
+                            "unpriced_quantity_btc": pricing_result.unpriced_quantity_btc,
+                            "market_snapshot_version": (
+                                pricing_result.market_snapshot_version
+                            ),
+                        },
+                    )
+                    return None
+                return self.trading_service.complete_generated_client_rfq(
+                    pending, pricing_result
+                )
             finally:
                 self.pending_rfqs = [
                     candidate

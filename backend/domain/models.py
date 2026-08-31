@@ -39,6 +39,20 @@ class QuoteStatus(str, Enum):
     REJECTED = "REJECTED"
 
 
+class PricingStatus(str, Enum):
+    OK = "OK"
+    NO_ELIGIBLE_SPOT_MARKETS = "NO_ELIGIBLE_SPOT_MARKETS"
+    INSUFFICIENT_LIQUIDITY = "INSUFFICIENT_LIQUIDITY"
+    INVALID_REQUEST = "INVALID_REQUEST"
+
+
+class PricingAdjustmentType(str, Enum):
+    EXPECTED_TAKER_FEE = "EXPECTED_TAKER_FEE"
+    BASE_CLIENT_MARGIN = "BASE_CLIENT_MARGIN"
+    CLIENT_PRICE_ROUNDING = "CLIENT_PRICE_ROUNDING"
+    INVENTORY_SKEW = "INVENTORY_SKEW"
+
+
 class HedgeOrderOrigin(str, Enum):
     MANUAL = "MANUAL"
     SYSTEM_ADVISORY = "SYSTEM_ADVISORY"
@@ -63,6 +77,7 @@ class EventType(str, Enum):
     RFQ_RECEIVED = "RFQ_RECEIVED"
     RFQ_VALIDATED = "RFQ_VALIDATED"
     QUOTE_GENERATED = "QUOTE_GENERATED"
+    QUOTE_PRICING_FAILED = "QUOTE_PRICING_FAILED"
     QUOTE_ACCEPTED = "QUOTE_ACCEPTED"
     CLIENT_FILL = "CLIENT_FILL"
     HEDGE_ORDER_CREATED = "HEDGE_ORDER_CREATED"
@@ -127,6 +142,101 @@ class RFQ(BaseModel):
     validated_notional_usd: Decimal = Field(gt=0)
 
 
+class PricingAdjustment(BaseModel):
+    """One auditable pricing component; inventory skew is a future extension."""
+
+    model_config = ConfigDict(frozen=True)
+
+    adjustment_type: PricingAdjustmentType
+    amount_bps: Optional[Decimal] = None
+    amount_usd: Decimal
+    assumption_label: str
+
+
+class PricingLiquidityLeg(BaseModel):
+    """Hypothetical L2 replacement liquidity, never an order or a fill."""
+
+    model_config = ConfigDict(frozen=True)
+
+    venue: str
+    instrument_id: str
+    instrument_type: InstrumentType
+    quantity_btc: Decimal = Field(gt=0)
+    execution_vwap_usd: Decimal = Field(gt=0)
+    executed_notional_usd: Decimal = Field(gt=0)
+    expected_taker_fee_bps: Decimal = Field(ge=0)
+    expected_fee_usd: Decimal = Field(ge=0)
+    usd_conversion_rate: Decimal = Field(gt=0)
+    usd_conversion_assumption: str
+
+
+class PricingResult(BaseModel):
+    """Immutable Step 12 economics used to create and later reconcile a quote."""
+
+    model_config = ConfigDict(frozen=True)
+
+    pricing_result_id: str
+    request_id: str
+    rfq_id: str
+    model_version: str
+    status: PricingStatus
+    status_reason: Optional[str] = None
+    client_side: ClientSide
+    requested_quantity_btc: Decimal = Field(ge=0)
+    priced_quantity_btc: Decimal = Field(ge=0)
+    unpriced_quantity_btc: Decimal = Field(ge=0)
+    market_snapshot_version: int = Field(ge=0)
+    snapshot_captured_at: datetime
+    reference_mid_usd: Optional[Decimal] = Field(default=None, gt=0)
+    reference_source: str
+    executable_replacement_vwap_usd: Optional[Decimal] = Field(
+        default=None, gt=0
+    )
+    executed_notional_usd: Decimal = Field(ge=0)
+    expected_market_impact_bps: Optional[Decimal] = None
+    expected_market_impact_usd: Optional[Decimal] = None
+    expected_fee_bps: Optional[Decimal] = Field(default=None, ge=0)
+    expected_fee_usd: Decimal = Field(ge=0)
+    client_margin_bps: Decimal = Field(ge=0)
+    client_margin_usd: Decimal = Field(ge=0)
+    rounding_adjustment_usd: Decimal = Field(ge=0)
+    expected_gross_edge_usd: Optional[Decimal] = Field(default=None, ge=0)
+    final_quote_price_usd: Optional[Decimal] = Field(default=None, gt=0)
+    client_price_increment_usd: Decimal = Field(gt=0)
+    quote_validity_seconds: int = Field(gt=0)
+    assumption_label: str
+    economics_disclosure: str
+    liquidity_legs: tuple[PricingLiquidityLeg, ...] = ()
+    adjustments: tuple[PricingAdjustment, ...] = ()
+    excluded_markets: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def pricing_quantities_and_success_fields_must_reconcile(self) -> "PricingResult":
+        if self.priced_quantity_btc + self.unpriced_quantity_btc != self.requested_quantity_btc:
+            raise ValueError("priced and unpriced quantities must equal requested quantity")
+        if self.status is PricingStatus.OK:
+            if self.requested_quantity_btc <= 0:
+                raise ValueError("successful pricing requires a positive quantity")
+            if self.unpriced_quantity_btc != 0:
+                raise ValueError("successful pricing must fully cover the requested quantity")
+            required = (
+                self.reference_mid_usd,
+                self.executable_replacement_vwap_usd,
+                self.expected_market_impact_bps,
+                self.expected_market_impact_usd,
+                self.expected_fee_bps,
+                self.expected_gross_edge_usd,
+                self.final_quote_price_usd,
+            )
+            if any(value is None for value in required):
+                raise ValueError("successful pricing requires complete economics")
+            if not self.liquidity_legs:
+                raise ValueError("successful pricing requires liquidity provenance")
+        elif self.final_quote_price_usd is not None:
+            raise ValueError("failed pricing cannot publish a client quote")
+        return self
+
+
 class Quote(BaseModel):
     quote_id: str
     rfq_id: str
@@ -139,6 +249,7 @@ class Quote(BaseModel):
     market_snapshot_id: str
     desk_state_version: int = Field(ge=0)
     pricing_source: str
+    pricing_result_id: Optional[str] = None
 
 
 class ClientTrade(BaseModel):
@@ -284,6 +395,7 @@ class DemoScenarioResult(BaseModel):
     desk_state_before: DeskState
     desk_state_after: DeskState
     events: tuple[Event, ...]
+    pricing_result: Optional[PricingResult] = None
 
 
 class PendingClientFlow(BaseModel):
