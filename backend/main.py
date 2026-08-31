@@ -66,6 +66,7 @@ from .market.models import (
     MarketVenue,
     UnifiedMarketSnapshot,
 )
+from .pnl import PnLSnapshot, pnl_service
 from .risk import risk_service
 from .risk.models import RiskAssessment
 from .simulated_execution import simulated_execution_service
@@ -350,6 +351,7 @@ async def get_demo_workspace() -> AdvisoryWorkspaceState:
 
     assessment = await risk_service.assess()
     recommendation = await advisory_hedge_service.recommendation(assessment)
+    pnl_snapshot = await pnl_service.snapshot()
     return AdvisoryWorkspaceState(
         client_flow=client_flow_service.state(),
         desk_state=demo_service.desk_state,
@@ -360,8 +362,20 @@ async def get_demo_workspace() -> AdvisoryWorkspaceState:
         + tuple(demo_service.hedge_orders.values()),
         hedge_fills=tuple(demo_service.hedge_fills),
         execution_batches=simulated_execution_service.batch_metrics,
+        pnl_snapshot=pnl_snapshot,
         events=tuple(demo_service.events[-100:]),
     )
+
+
+@app.get(
+    "/demo/pnl",
+    response_model=PnLSnapshot,
+    tags=["demo", "pnl"],
+)
+async def get_demo_pnl() -> PnLSnapshot:
+    """Return the same session PnL snapshot embedded in the trading workspace."""
+
+    return await pnl_service.snapshot()
 
 
 @app.post(

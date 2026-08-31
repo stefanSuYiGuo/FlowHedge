@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict
 from ..auto_hedge.models import AutoHedgeIntervention
 from ..domain.models import ClientFlowState, DeskState, Event, HedgeFill, HedgeOrder
 from ..hedge_optimizer.models import HedgePlan
+from ..pnl.models import PnLSnapshot
 from ..risk.models import RiskAssessment
 from ..simulated_execution.models import ExecutionBatchMetrics
 
@@ -50,4 +51,5 @@ class AdvisoryWorkspaceState(BaseModel):
     hedge_orders: tuple[HedgeOrder, ...]
     hedge_fills: tuple[HedgeFill, ...]
     execution_batches: tuple[ExecutionBatchMetrics, ...] = ()
+    pnl_snapshot: PnLSnapshot
     events: tuple[Event, ...]

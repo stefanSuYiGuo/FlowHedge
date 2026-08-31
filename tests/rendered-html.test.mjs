@@ -33,7 +33,11 @@ test("server-renders the FlowHedge terminal shell", async () => {
   assert.match(html, /auto target 90% of soft \(\$900K\)/i);
   assert.match(html, /SYSTEM-ASSISTED · MULTI-VENUE EXECUTION · STEP 11/);
   assert.match(html, /No exposure to hedge/);
-  assert.match(html, /PnL accounting unavailable/);
+  assert.match(html, /TOTAL DESK PNL/);
+  assert.match(html, /SESSION SINCE RESET/);
+  assert.match(html, /SIMULATED EXECUTION/);
+  assert.match(html, /RECONCILIATION DIFFERENCE/);
+  assert.doesNotMatch(html, /PnL accounting unavailable/);
   assert.match(html, /No hedge orders/);
   assert.match(html, /RESET DEMO/);
   assert.match(html, /Waiting for institutional flow/);

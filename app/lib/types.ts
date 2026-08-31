@@ -359,6 +359,49 @@ export interface ClientFlowState {
   completed_count: number;
 }
 
+export type PnLStatus = "COMPLETE" | "PARTIAL" | "UNRECONCILED";
+export type PnLAttributionStatus = "COMPLETE" | "PARTIAL";
+
+export interface PnLPosition {
+  bucket_id: string;
+  instrument_type: "SPOT" | "PERPETUAL";
+  venue: string | null;
+  instrument_id: string;
+  signed_quantity_btc: string;
+  average_entry_price_usd: string | null;
+  mark_price_usd: string | null;
+  gross_realized_pnl_usd: string;
+  unrealized_mtm_usd: string | null;
+  valuation_status: "FLAT" | "VALUED" | "MARK_UNAVAILABLE";
+  valuation_method: string;
+  data_quality_flags: string[];
+}
+
+export interface PnLSnapshot {
+  status: PnLStatus;
+  as_of: string;
+  desk_state_version: number;
+  market_snapshot_version: number | null;
+  currency: "USD";
+  valuation_method: "AVERAGE_COST_BTC_EQUIVALENT_LINEARIZED_USD";
+  spot_mark_usd: string | null;
+  gross_realized_pnl_usd: string;
+  trading_fees_usd: string | null;
+  net_realized_pnl_usd: string | null;
+  spot_unrealized_mtm_usd: string | null;
+  perp_unrealized_mtm_usd: string | null;
+  total_desk_pnl_usd: string | null;
+  client_spread_capture_usd: string;
+  hedge_slippage_vs_expected_usd: string | null;
+  hedge_implementation_shortfall_usd: string | null;
+  inventory_market_movement_usd: string | null;
+  reconciliation_difference_usd: string | null;
+  reconciled: boolean;
+  attribution_status: PnLAttributionStatus;
+  positions: PnLPosition[];
+  data_quality_flags: string[];
+}
+
 export interface DemoWorkspaceState {
   client_flow: ClientFlowState;
   desk_state: DeskState;
@@ -369,6 +412,7 @@ export interface DemoWorkspaceState {
   hedge_fills: HedgeFill[];
   execution_batches: ExecutionBatchMetrics[];
   events: FlowEvent[];
+  pnl_snapshot: PnLSnapshot;
 }
 
 export type AutoHedgeInterventionStatus =

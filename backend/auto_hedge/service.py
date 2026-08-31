@@ -24,6 +24,8 @@ from ..domain.models import (
     HedgeOrder,
     HedgeOrderOrigin,
 )
+from ..execution_cost.engine import estimate_execution_cost
+from ..execution_cost.models import ExecutionCostRequest, ExecutionSide
 from ..hedge_optimizer.models import (
     HedgeOptimizationInput,
     HedgePlanStatus,
@@ -34,6 +36,7 @@ from ..market.models import (
     ExecutableBookView,
     ExecutableMarketSnapshot,
     MarketConnectionStatus,
+    MarketVenue,
 )
 from ..risk.models import RiskAssessment
 from ..risk.service import RiskService, risk_service
@@ -438,15 +441,81 @@ class AutoHedgeController:
                 proposed_fill_quantity,
                 abs(available_for_auto_fill),
             )
+            snapshot = await self.optimizer.store.executable_snapshot("BTC")
+            try:
+                venue = MarketVenue(order.venue)
+            except ValueError:
+                self._reoptimize_after_unexecutable_fill(
+                    latest,
+                    order,
+                    reason="AUTO_ORDER_VENUE_UNAVAILABLE",
+                    market_snapshot_version=snapshot.snapshot_version,
+                )
+                return
+            execution = estimate_execution_cost(
+                ExecutionCostRequest(
+                    request_id=(
+                        f"auto-fill-preview-{self._active.intervention_id}-"
+                        f"{order.hedge_order_id}-{snapshot.snapshot_version}"
+                    ),
+                    venue=venue,
+                    instrument_id=order.instrument_id,
+                    instrument_type=order.instrument_type,
+                    side=(
+                        ExecutionSide.BUY
+                        if order.side.value in {"BUY", "LONG"}
+                        else ExecutionSide.SELL
+                    ),
+                    quantity_btc_equivalent=fill_quantity,
+                    market_snapshot_version=snapshot.snapshot_version,
+                    requested_at=self.now(),
+                ),
+                snapshot,
+                self.optimizer.fee_config,
+            )
+            if (
+                execution.filled_quantity_btc <= 0
+                or execution.execution_vwap is None
+                or execution.usd_conversion_rate is None
+                or execution.arrival_mid is None
+                or execution.taker_fee_bps is None
+                or execution.fee_usd is None
+            ):
+                self._reoptimize_after_unexecutable_fill(
+                    latest,
+                    order,
+                    reason=(
+                        "AUTO_FILL_ECONOMICS_UNAVAILABLE_"
+                        f"{execution.status.value}"
+                    ),
+                    market_snapshot_version=snapshot.snapshot_version,
+                )
+                return
             self._fill_sequence += 1
             try:
                 result = self.trading.simulate_hedge_fill(
                     order.hedge_order_id,
-                    fill_quantity,
+                    execution.filled_quantity_btc,
                     (
                         f"auto-fill-{self._active.intervention_id}-"
                         f"{self._fill_sequence:06}"
                     ),
+                    fill_price_usd=(
+                        execution.execution_vwap
+                        * execution.usd_conversion_rate
+                    ),
+                    execution_source=(
+                        f"AUTO_RISK · {venue.value} · "
+                        f"{order.instrument_type.value} · L2 SIMULATION"
+                    ),
+                    market_snapshot_version=snapshot.snapshot_version,
+                    arrival_mid_usd=(
+                        execution.arrival_mid
+                        * execution.usd_conversion_rate
+                    ),
+                    expected_vwap_usd=order.expected_vwap_usd,
+                    taker_fee_bps=execution.taker_fee_bps,
+                    fee_usd=execution.fee_usd,
                 )
             except (DemoStateError, HedgeFillError):
                 self._emit(
@@ -502,6 +571,41 @@ class AutoHedgeController:
                         ),
                     },
                 )
+
+    def _reoptimize_after_unexecutable_fill(
+        self,
+        assessment: RiskAssessment,
+        order: HedgeOrder,
+        *,
+        reason: str,
+        market_snapshot_version: int,
+    ) -> None:
+        """Cancel stale working intent rather than inventing an auto fill."""
+
+        assert self._active is not None
+        cancellation = self.trading.cancel_auto_risk_orders(
+            self._active.intervention_id,
+            reason=reason,
+        )
+        self._update_active_from_assessment(assessment)
+        self._set_status(
+            AutoHedgeInterventionStatus.REOPTIMIZING,
+            reasons=(reason,),
+        )
+        self._next_retry_at = self.now() + timedelta(
+            seconds=float(self.retry_interval_seconds)
+        )
+        self._emit(
+            EventType.AUTO_HEDGE_REOPTIMIZING,
+            {
+                "intervention_id": self._active.intervention_id,
+                "breach_id": self._active.breach_id,
+                "reason": reason,
+                "hedge_order_id": order.hedge_order_id,
+                "market_snapshot_version": market_snapshot_version,
+                "cancelled_order_ids": cancellation.cancelled_hedge_order_ids,
+            },
+        )
 
     async def _complete(self, assessment: RiskAssessment) -> None:
         assert self._active is not None

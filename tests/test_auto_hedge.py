@@ -56,6 +56,8 @@ def spot_market(
     *,
     depth: str = "100",
     status: MarketConnectionStatus = MarketConnectionStatus.LIVE,
+    bids: tuple[tuple[Decimal, Decimal], ...] | None = None,
+    asks: tuple[tuple[Decimal, Decimal], ...] | None = None,
 ) -> ExecutableBookView:
     rules = InstrumentRules(
         venue=MarketVenue.COINBASE,
@@ -78,8 +80,8 @@ def spot_market(
     )
     _, book = normalized_books_from_levels(
         rules=rules,
-        bids=((Decimal("99990"), Decimal(depth)),),
-        asks=((Decimal("100010"), Decimal(depth)),),
+        bids=bids or ((Decimal("99990"), Decimal(depth)),),
+        asks=asks or ((Decimal("100010"), Decimal(depth)),),
         exchange_timestamp=NOW,
         received_at=NOW,
     )
@@ -125,6 +127,18 @@ class MutableStore:
 
     async def executable_snapshot(self, _: str) -> ExecutableMarketSnapshot:
         return self.value
+
+
+class SequencedStore:
+    """Return deterministic atomic snapshots for one controller step."""
+
+    def __init__(self, values: tuple[ExecutableMarketSnapshot, ...]) -> None:
+        self._values = list(values)
+
+    async def executable_snapshot(self, _: str) -> ExecutableMarketSnapshot:
+        if len(self._values) > 1:
+            return self._values.pop(0)
+        return self._values[0]
 
 
 class ActiveAutoRisk:
@@ -351,6 +365,63 @@ def test_auto_orders_have_auditable_origin_and_identifiers() -> None:
     assert order.source_breach_id == BREACH_ID
     assert order.source_plan_id == intervention.active_plan_id
     assert event_count(trading, EventType.AUTO_HEDGE_ORDER_CREATED) == 1
+
+
+def test_auto_fill_sweeps_latest_l2_and_records_actual_economics() -> None:
+    service, _, store, trading = controller("-35")
+    started = run(service.step())
+    assert started is not None
+    order = next(iter(trading.hedge_orders.values()))
+    assert order.expected_vwap_usd == Decimal("100010")
+
+    store.value = snapshot(
+        spot_market(
+            bids=((Decimal("99980"), Decimal("100")),),
+            asks=(
+                (Decimal("100020"), Decimal("5")),
+                (Decimal("100040"), Decimal("100")),
+            ),
+        ),
+        version=502,
+    )
+    run(service.step())
+
+    assert len(trading.hedge_fills) == 1
+    fill = trading.hedge_fills[0]
+    expected_notional = Decimal("5") * Decimal("100020") + Decimal(
+        "8"
+    ) * Decimal("100040")
+    assert fill.quantity_btc == Decimal("13")
+    assert fill.fill_price_usd == expected_notional / Decimal("13")
+    assert fill.execution_source == "AUTO_RISK · COINBASE · SPOT · L2 SIMULATION"
+    assert fill.market_snapshot_version == 502
+    assert fill.arrival_mid_usd == Decimal("100000")
+    assert fill.expected_vwap_usd == Decimal("100010")
+    assert fill.taker_fee_bps == Decimal("2")
+    assert fill.fee_usd == expected_notional * Decimal("2") / Decimal("10000")
+
+
+def test_auto_fill_race_reoptimizes_without_fabricating_a_fill() -> None:
+    service, _, store, trading = controller("-35")
+    run(service.step())
+    live = store.value
+    unavailable = snapshot(
+        spot_market(status=MarketConnectionStatus.DISCONNECTED),
+        version=502,
+    )
+    service.optimizer.store = SequencedStore((live, unavailable))
+
+    intervention = run(service.step())
+
+    assert intervention is not None
+    assert intervention.status is AutoHedgeInterventionStatus.REOPTIMIZING
+    assert trading.hedge_fills == []
+    assert trading.desk_state.working_order_delta_btc == 0
+    assert all(
+        order.status is HedgeOrderStatus.CANCELLED
+        for order in trading.hedge_orders.values()
+    )
+    assert event_count(trading, EventType.AUTO_HEDGE_REOPTIMIZING) == 1
 
 
 def test_helpful_client_flow_cancels_excess_orders_and_reoptimizes_latest_state() -> None:

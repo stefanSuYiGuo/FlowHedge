@@ -27,6 +27,7 @@ import type {
   ManualHedgePreview,
   MarketStateView,
   PendingClientFlow,
+  PnLSnapshot,
   RiskAssessment,
   UnifiedMarketSnapshot,
 } from "./lib/types";
@@ -79,6 +80,7 @@ export default function Home() {
   const [manualAllocations, setManualAllocations] = useState<Record<ManualMarketKey, string>>({ ...emptyManualAllocations });
   const [manualPreview, setManualPreview] = useState<ManualHedgePreview | null>(null);
   const [executionBatches, setExecutionBatches] = useState<ExecutionBatchMetrics[]>([]);
+  const [pnlSnapshot, setPnlSnapshot] = useState<PnLSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [apiState, setApiState] = useState<"connecting" | "online" | "offline">(
     "connecting",
@@ -102,6 +104,7 @@ export default function Home() {
     setHedgeOrders(workspace.hedge_orders);
     setHedgeFills(workspace.hedge_fills);
     setExecutionBatches(workspace.execution_batches);
+    setPnlSnapshot(workspace.pnl_snapshot);
     setCompletedScenarios(workspace.client_flow.completed_scenarios);
     setPendingRfqs(workspace.client_flow.pending_rfqs);
     setCompletedFlowCount(workspace.client_flow.completed_count);
@@ -1047,8 +1050,12 @@ export default function Home() {
             </div>
           </Panel>
 
-          <Panel title="Desk PnL" meta="NOT CALCULATED">
-            <UnavailableFeature title="PnL accounting unavailable" detail="No spread capture, fees, MTM, funding, or total PnL is calculated in this step." compact />
+          <Panel
+            title="Desk PnL"
+            meta={pnlSnapshot ? `${pnlSnapshot.status} · LIVE MTM` : "UNAVAILABLE"}
+            className="pnl-panel"
+          >
+            <DeskPnl snapshot={pnlSnapshot} />
           </Panel>
 
           <Panel title="Hedge Blotter" meta={`${hedgeOrders.length} orders · ${hedgeFills.length} fills`} grow>
@@ -1374,6 +1381,118 @@ function formatHoldingHorizon(seconds: number | null): string {
   return `${seconds}s`;
 }
 
+function DeskPnl({ snapshot }: { snapshot: PnLSnapshot | null }) {
+  const totalPnl = pnlNumber(snapshot?.total_desk_pnl_usd);
+  const fees = pnlNumber(snapshot?.trading_fees_usd);
+  const implementationShortfall = pnlNumber(snapshot?.hedge_implementation_shortfall_usd);
+  const reconciliationDifference = pnlNumber(snapshot?.reconciliation_difference_usd);
+  const status = snapshot?.status ?? "UNAVAILABLE";
+  const reconciliationLabel = !snapshot
+    ? "UNAVAILABLE"
+    : snapshot.reconciled
+      ? "RECONCILED"
+      : snapshot.status === "PARTIAL"
+        ? "PARTIAL"
+        : "CHECK REQUIRED";
+
+  return (
+    <div className="desk-pnl" aria-label="Live session PnL">
+      <div className="pnl-hero">
+        <div>
+          <span className="pnl-kicker">TOTAL DESK PNL</span>
+          <strong className={pnlTone(totalPnl)}>
+            {totalPnl === null ? "—" : formatSignedUsd(totalPnl)}
+          </strong>
+        </div>
+        <span className={`pnl-status pnl-status-${status.toLowerCase()}`}>{status}</span>
+      </div>
+
+      <div className="pnl-context" aria-label="PnL scope">
+        <span>SESSION SINCE RESET</span>
+        <span>LIVE MTM</span>
+        <span>SIMULATED EXECUTION</span>
+      </div>
+
+      <section className="pnl-breakdown" aria-label="PnL accounting">
+        <h3>ACCOUNTING</h3>
+        <PnlLine label="Gross realized" value={pnlNumber(snapshot?.gross_realized_pnl_usd)} />
+        <PnlLine label="Trading fees" value={fees === null ? null : -Math.abs(fees)} />
+        <PnlLine label="Net realized" value={pnlNumber(snapshot?.net_realized_pnl_usd)} emphasized />
+        <PnlLine label="Spot unrealized MTM" value={pnlNumber(snapshot?.spot_unrealized_mtm_usd)} />
+        <PnlLine label="Perp unrealized MTM" value={pnlNumber(snapshot?.perp_unrealized_mtm_usd)} />
+      </section>
+
+      <section className="pnl-breakdown pnl-attribution" aria-label="PnL attribution">
+        <h3>
+          ATTRIBUTION
+          <span>{snapshot?.attribution_status ?? "UNAVAILABLE"}</span>
+        </h3>
+        <PnlLine label="Client spread capture" value={pnlNumber(snapshot?.client_spread_capture_usd)} />
+        <PnlLine
+          label="Hedge implementation shortfall"
+          value={implementationShortfall === null ? null : -implementationShortfall}
+        />
+        <PnlLine label="Inventory / market movement" value={pnlNumber(snapshot?.inventory_market_movement_usd)} />
+        <PnlLine
+          label="Slippage vs expected (cost)"
+          value={snapshot?.hedge_slippage_vs_expected_usd === null || snapshot?.hedge_slippage_vs_expected_usd === undefined
+            ? null
+            : -Number(snapshot.hedge_slippage_vs_expected_usd)}
+          secondary
+        />
+      </section>
+
+      <div className={`pnl-reconciliation ${snapshot?.reconciled ? "is-reconciled" : ""}`}>
+        <div>
+          <span>{reconciliationLabel}</span>
+          <small>RECONCILIATION DIFFERENCE</small>
+        </div>
+        <strong className={reconciliationDifference === 0 ? "positive" : pnlTone(reconciliationDifference)}>
+          {reconciliationDifference === null ? "—" : formatSignedUsd(reconciliationDifference)}
+        </strong>
+      </div>
+
+      <div className="pnl-provenance">
+        <span>
+          SPOT MARK {snapshot?.spot_mark_usd === null || snapshot?.spot_mark_usd === undefined
+            ? "—"
+            : `$${formatUsd(Number(snapshot.spot_mark_usd))}`}
+        </span>
+        <span>
+          {snapshot?.market_snapshot_version === null || snapshot?.market_snapshot_version === undefined
+            ? "MARK SNAPSHOT —"
+            : `MARK SNAPSHOT v${snapshot.market_snapshot_version}`}
+        </span>
+      </div>
+
+      {snapshot?.data_quality_flags && snapshot.data_quality_flags.length > 0 && (
+        <p className="pnl-quality" role="status">
+          {snapshot.data_quality_flags.slice(0, 3).map(humanizeReason).join(" · ")}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function PnlLine({
+  label,
+  value,
+  emphasized = false,
+  secondary = false,
+}: {
+  label: string;
+  value: number | null;
+  emphasized?: boolean;
+  secondary?: boolean;
+}) {
+  return (
+    <div className={`pnl-line ${emphasized ? "emphasized" : ""} ${secondary ? "secondary" : ""}`.trim()}>
+      <span>{label}</span>
+      <strong className={pnlTone(value)}>{value === null ? "—" : formatSignedUsd(value)}</strong>
+    </div>
+  );
+}
+
 function Panel({
   title,
   meta,
@@ -1575,6 +1694,28 @@ function formatBtc(value: number): string {
 
 function formatUsd(value: number): string {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value);
+}
+
+function pnlNumber(value: string | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function pnlTone(value: number | null): "positive" | "negative" | "pnl-neutral" {
+  if (value === null || Math.abs(value) < 0.005) return "pnl-neutral";
+  return value > 0 ? "positive" : "negative";
+}
+
+function formatSignedUsd(value: number): string {
+  const absolute = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Math.abs(value));
+  if (Math.abs(value) < 0.005) return absolute;
+  return `${value > 0 ? "+" : "−"}${absolute}`;
 }
 
 function formatCompactUsd(value: number): string {
