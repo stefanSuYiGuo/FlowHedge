@@ -358,7 +358,9 @@ button:disabled { opacity: .45; cursor: not-allowed !important; }
 .pnl-reconciliation > strong { flex: 0 0 auto; font: 800 10px var(--font-geist-mono), monospace; }
 .pnl-provenance { margin-top: 8px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 8px; color: var(--muted); font: 8px/1.4 var(--font-geist-mono), monospace; }
 .pnl-quality { margin: 7px 0 0; padding: 6px 7px; color: var(--warning); background: rgba(224, 169, 54, .055); border-left: 2px solid #705b24; font: 8px/1.45 var(--font-geist-mono), monospace; text-transform: uppercase; }
-.hedge-blotter { padding: 7px 11px; }
+.hedge-blotter-panel { height: clamp(360px, 52vh, 620px); min-height: 360px; max-height: 620px; flex: 0 0 clamp(360px, 52vh, 620px); display: flex; flex-direction: column; overflow: hidden; }
+.hedge-blotter-panel > .empty-state { flex: 1; }
+.hedge-blotter { min-height: 0; padding: 7px 11px; flex: 1; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--border-strong) transparent; }
 .hedge-blotter > div { padding: 8px 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid #142532; font: 9px var(--font-geist-mono), monospace; }
 .hedge-blotter > div:last-child { border-bottom: 0; }
 .hedge-blotter strong { display: block; font-size: 10px; }

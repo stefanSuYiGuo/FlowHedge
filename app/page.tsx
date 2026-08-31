@@ -169,6 +169,10 @@ export default function Home() {
 
   const scenario = completedScenarios.at(-1) ?? null;
   const pendingRfq = pendingRfqs.at(-1) ?? null;
+  const newestFirstHedgeOrders = useMemo(
+    () => [...hedgeOrders].sort((left, right) => right.created_at.localeCompare(left.created_at)),
+    [hedgeOrders],
+  );
 
   const marketStates = marketSnapshot?.markets ?? [];
   const krakenSpotState = marketStates.find(
@@ -1058,12 +1062,16 @@ export default function Home() {
             <DeskPnl snapshot={pnlSnapshot} />
           </Panel>
 
-          <Panel title="Hedge Blotter" meta={`${hedgeOrders.length} orders · ${hedgeFills.length} fills`} grow>
+          <Panel
+            title="Hedge Blotter"
+            meta={`${hedgeOrders.length} orders · ${hedgeFills.length} fills`}
+            className="hedge-blotter-panel"
+          >
             {hedgeOrders.length === 0 ? (
               <EmptyState title="No hedge orders" detail="Create a manual allocation after the client fill." />
             ) : (
               <div className="hedge-blotter">
-                {hedgeOrders.map((order) => {
+                {newestFirstHedgeOrders.map((order) => {
                   const metrics = executionBatches
                     .flatMap((batch) => batch.orders)
                     .find((candidate) => candidate.hedge_order_id === order.hedge_order_id);
