@@ -1,437 +1,300 @@
 # FlowHedge
 
-FlowHedge is an institutional crypto sales-trading simulator. The current
-checkpoint contains the reviewable trading-terminal layout, a backend-driven
-institutional client-flow simulator, and an accounting chain from RFQ through
-client fill, manual Spot/Perp hedge orders, simulated fills, and desk-state
-updates. RiskPolicy v1.1, the backend-only Executable Cost Engine v1, and
-Derivative Hedge Economics v1 are active, and the public market universe
-contains six Spot/Perpetual candidates across Kraken, Coinbase, and OKX.
-Production pricing, hedge optimization, smart routing, real execution, and PnL
-logic remain deferred.
+FlowHedge is a real-time institutional crypto RFQ, hedge-management, and desk PnL system. It consumes public BTC Spot and Perpetual order books from Kraken, Coinbase, and OKX to price client flow, maintain fill-based inventory, build cost-aware hedge plans, simulate multi-venue execution, and reconcile session PnL.
 
-## Current layout
+The system is designed around explicit accounting boundaries: recommendations do not change positions, orders affect only working and projected exposure, and only completed client trades or hedge fills affect actual inventory and PnL. Stale or incomplete market inputs fail closed instead of producing unsupported prices or hedge decisions.
 
-- **Header:** the currently selected market and its live mid-price, independent API/market connectivity, and manual/auto hedge mode.
-- **Desk strip:** actual, working, and projected delta plus Spot and derivative positions.
-- **Left rail:** selectable Kraken/Coinbase/OKX Spot and Perp compact books, derivatives context, multi-order RFQ inbox, and backend flow pause/resume controls.
-- **Center stage:** pending/accepted demo client quotes, live-but-not-optimized Kraken hedge reference, manual hedge allocation and simulated fill controls, and event tape.
-- **Right rail:** reconciled desk positions, live RiskPolicy assessment, deferred PnL, and the hedge order/fill blotter.
+FlowHedge uses public market data only. It does not require exchange credentials and does not submit live orders.
 
-No countdown or prediction of the next client RFQ is shown. Orders are modeled
-as asynchronous arrivals.
+## Core capabilities
 
-## Run the frontend
+- Normalized BTC Spot and Perpetual L2 books across Kraken, Coinbase, and OKX
+- Synthetic institutional RFQ flow with a strict notional threshold above USD 500,000
+- Executable, multi-venue RFQ pricing based on reachable Spot liquidity
+- Fill-driven inventory, delta, working-order, and projected-exposure accounting
+- RiskPolicy with soft and hard USD delta bands, a grace period, and a bounded auto-hedge target
+- L2 sweep, VWAP, slippage, fees, liquidity shortfall, and Perpetual carry economics
+- Deterministic marginal-cost allocation across eligible venues and instruments
+- Trader acceptance of system plans or manual multi-venue allocation
+- Current-book simulated execution with auditable orders, fills, and batch metrics
+- Reconciled session PnL with realized, unrealized, fee, spread, and execution attribution
 
-Prerequisites: Node.js 22.13 or newer.
+## System flow
 
-```bash
-cd FlowHedge
-npm install
-npm run dev
+```mermaid
+flowchart LR
+    M[Public Spot and Perpetual L2] --> P[Executable RFQ Pricing]
+    F[Synthetic Institutional RFQ] --> P
+    P --> C[Auto-Accepted Client Trade]
+    C --> D[Desk State and Inventory]
+    D --> R[RiskPolicy]
+    M --> E[Execution Cost and Carry]
+    R --> H[Hedge Optimizer]
+    E --> H
+    H --> X{Trader or Auto Risk}
+    X --> O[Venue-Specific Hedge Orders]
+    O --> L[Current-L2 Simulated Fills]
+    L --> D
+    C --> N[Reconciled PnL]
+    L --> N
+    M --> N
 ```
 
-Open <http://localhost:3000> in a browser. The development server refreshes the
-page automatically when frontend files change. Stop it with `Control-C`.
+Client orders arrive asynchronously, so the desk can receive additional flow while prior exposure remains open. Opposing client flow naturally offsets the existing position before any new external hedge is required.
 
-## Run the backend shell
+## Architecture
 
-Open a second terminal:
+| Layer | Responsibility | Main location |
+| --- | --- | --- |
+| Trading workstation | Market panels, RFQ inbox, risk, recommendations, execution, blotters, and PnL | `app/` |
+| API and orchestration | Runtime lifecycle, coherent workspace reads, and command endpoints | `backend/main.py` |
+| Domain and accounting | Trading records, validation, and fill-driven desk-state transitions | `backend/domain/`, `backend/demo.py` |
+| Market data | Venue adapters, normalization, connection state, and atomic snapshots | `backend/market/` |
+| Pricing | Executable client quote construction and quote metadata | `backend/pricing/` |
+| Risk | Exposure classification, hedge targets, grace-period state, and auto-hedge requirements | `backend/risk/` |
+| Hedge economics | Immediate L2 execution cost and expected Perpetual carry | `backend/execution_cost/`, `backend/hedge_economics/` |
+| Optimization | Candidate eligibility and marginal-cost hedge allocation | `backend/hedge_optimizer/` |
+| Hedge workflows | Trader advisory plans and hard-limit auto-hedge orchestration | `backend/advisory/`, `backend/auto_hedge/` |
+| Execution | Manual previews, venue-specific orders, simulated fills, and metrics | `backend/simulated_execution/` |
+| PnL | Average-cost ledgers, valuation, attribution, and reconciliation | `backend/pnl/` |
+
+The React 19 interface runs through Vinext/Vite. The backend is an asynchronous FastAPI application. Runtime trading state is held in memory, while model boundaries keep the services independently testable and replaceable.
+
+## Market coverage
+
+| Venue | Instrument | Native symbol | Contract model |
+| --- | --- | --- | --- |
+| Kraken | Spot | `BTC/USD` | Base asset |
+| Kraken | Perpetual | `PI_XBTUSD` | Inverse |
+| Coinbase | Spot | `BTC-USD` | Base asset |
+| Coinbase | Perpetual | `BTC-PERP-INTX` | Linear |
+| OKX | Spot | `BTC-USDT` | Base asset |
+| OKX | Perpetual | `BTC-USDT-SWAP` | Linear |
+
+Each adapter publishes a common market identity, normalized bids and asks, timestamps, sequence metadata, connection health, and data-quality state. The UI displays five levels, while executable calculations can consume up to 200 legitimate venue levels. Missing depth is never synthesized.
+
+USDT and USDC are treated as USD at 1:1 under a visible runtime assumption.
+
+## Trading models
+
+### Client flow and RFQ pricing
+
+The client-flow service generates BTC orders dynamically from current market prices. Every RFQ must satisfy:
+
+```text
+quantity_btc × reference_price_usd > 500,000 USD
+```
+
+Orders arrive at a randomized interval of 75–105 seconds by default, support both client BUY and SELL sides, and use 0.01 BTC quantity precision. The interface shows a short pricing state before treating the quote as accepted; client decline behavior is outside the current scope.
+
+Pricing sweeps eligible, fresh Spot books for the full client quantity. It combines executable VWAP, configured taker cost, and client margin, then rounds adversely to the configured price increment. The reference is the median of eligible USD-converted Spot mids, and quotes expire after five seconds. If the required executable inputs are unavailable, pricing does not fall back to an invented quote.
+
+### Position and risk accounting
+
+The state model separates four quantities:
+
+- **Actual delta** changes only after client trades or hedge fills.
+- **Working delta** represents signed quantities on open hedge orders.
+- **Projected delta** is actual delta plus working delta.
+- **Inventory age** measures how long non-zero actual exposure has remained open.
+
+Default RiskPolicy thresholds are centrally configured:
+
+| State | Absolute delta notional | Behavior |
+| --- | ---: | --- |
+| GREEN | Up to USD 1,000,000 | No required hedge |
+| YELLOW | Above USD 1,000,000 and up to USD 3,000,000 | Advisory hedge toward the signed soft limit |
+| RED | Above USD 3,000,000 | Advisory target at the signed soft limit; hard-breach grace period starts |
+
+If RED persists for five seconds without sufficient intervention, the system emits an auto-hedge requirement targeting 90% of the soft limit: USD 900,000 by default. The target is reduced exposure, not an automatic flatten to zero.
+
+Risk notional uses the median of fresh Kraken and Coinbase USD Spot references. One healthy source can sustain a degraded assessment; if neither is usable, risk-sensitive actions hold rather than rely on a stale reference.
+
+### Executable cost and hedge economics
+
+For each candidate, the execution-cost engine sweeps the correct side of the normalized L2 book and returns:
+
+- Executable quantity and shortfall
+- VWAP and worst reached price
+- Arrival-mid slippage and price impact
+- Filled notional and configured taker fee
+- Source snapshot and data-quality metadata
+
+Spot carry is zero. Perpetual economics add expected funding events across the configured holding horizon. Predicted funding is preferred; current funding can be used with degraded quality, while missing required schedules or rates make the candidate ineligible. Expected funding is an optimization input only and is not booked as actual PnL.
+
+### Hedge optimizer and execution
+
+The deterministic `GREEDY_MARGINAL_L2_V1` allocator evaluates eligible marginal liquidity across all six venue/instrument candidates. It combines immediate execution cost, fee, and applicable carry economics, then allocates the requested BTC-equivalent quantity without exceeding reachable depth.
+
+In advisory mode, the trader can accept the generated plan or switch to manual override. Manual allocation currently supports four directly editable routes:
+
+- Coinbase Spot
+- Kraken Spot
+- OKX Spot
+- OKX Perpetual
+
+A manual preview validates direction, maximum quantity, current exposure, market freshness, and executable depth against one atomic snapshot. Submission creates venue-specific working orders; execution then sweeps the latest L2 and records realized VWAP, slippage, fees, fill quantity, and any shortfall.
+
+For a persistent hard-limit breach, the same optimizer drives automatic simulated hedging and re-assessment until absolute exposure is at or below the configured USD 900,000 target, subject to eligible liquidity.
+
+## PnL and reconciliation
+
+PnL is session-to-date from the latest reset and is rebuilt from completed client trades and hedge fills. RFQs, quotes, recommendations, and unfilled orders never enter the ledger.
+
+The engine maintains one consolidated Spot average-cost ledger and separate Perpetual ledgers by venue and instrument. It reports:
+
+- Client spread capture versus the quote reference mid
+- Gross realized trading PnL from position reductions and reversals
+- Actual simulated hedge fees and net realized PnL
+- Spot unrealized MTM from a fresh consolidated Spot mark
+- Perpetual unrealized MTM from a fresh venue mark or executable midpoint fallback
+- Hedge slippage versus expected VWAP and implementation shortfall versus arrival mid
+- Residual inventory market movement
+- Total desk PnL and reconciliation status
+
+The core identities are:
+
+```text
+Net Realized PnL = Gross Realized PnL − Trading Fees
+
+Total Desk PnL = Net Realized PnL
+               + Spot Unrealized MTM
+               + Perpetual Unrealized MTM
+
+Total Desk PnL = Client Spread Capture
+               − Hedge Implementation Shortfall
+               − Trading Fees
+               + Inventory Market Movement
+```
+
+Hedge slippage versus expected VWAP is reported as a separate execution diagnostic rather than counted again in the attribution bridge. The accounting total is independently checked against transaction cash plus marked open positions. A total is published only when required marks and fees are available and the difference is within USD 0.01. Otherwise, the snapshot is explicitly `PARTIAL` or `UNRECONCILED` and exposes data-quality flags.
+
+## Runtime configuration
+
+The principal assumptions are centralized in `backend/config.py`:
+
+| Setting | Default |
+| --- | ---: |
+| Minimum client RFQ notional | Strictly above USD 500,000 |
+| Client-flow interval | 75–105 seconds |
+| Quote acceptance delay | 1.5 seconds |
+| Quote validity | 5 seconds |
+| Client margin | 5.0 bps |
+| Taker fee | 2.0 bps |
+| Expected hedge horizon | 4 hours |
+| Soft delta limit | USD 1,000,000 |
+| Hard delta limit | USD 3,000,000 |
+| Hard-breach grace period | 5 seconds |
+| Auto-hedge target | USD 900,000 |
+| Stablecoin conversion | USDT/USD and USDC/USD at 1.0 |
+
+These are illustrative desk assumptions, not exchange fee schedules or institutional account terms.
+
+## Run locally
+
+### Prerequisites
+
+- Node.js 22.13.0 or newer
+- Python 3.9 or newer
+- Internet access to the supported public exchange feeds
+
+### Install
 
 ```bash
+git clone https://github.com/stefanSuYiGuo/FlowHedge.git
 cd FlowHedge
+npm ci
+
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r backend/requirements.txt
-python -m uvicorn backend.main:app --port 8000
 ```
 
-Then open:
-
-- API health: <http://localhost:8000/health>
-- Interactive API documentation: <http://localhost:8000/docs>
-
-The frontend reads demo state and actions from this API.
-
-For a stable demo, use the command above without the development reloader. If
-the page remains in `API CONNECTING`, stop any older backend with `Control-C`,
-start this command again, and confirm that `/health` returns before refreshing
-the page. Frontend requests time out after five seconds and recover
-automatically when the backend becomes available.
-
-The Kraken, Coinbase, and OKX adapters use public market data only. No account,
-API key, or real-order permission is required.
-
-## Step 2 accounting demo
-
-The backend exposes a fixed, repeatable scenario for checking the accounting
-rules before the UI is connected:
-
-- `POST /demo/reset` returns the desk to a flat version-zero state.
-- `POST /demo/run-client-trade` processes a valid USD 590,000 client BUY RFQ,
-  auto-accepts a clearly marked fixture quote, records one immutable client
-  trade, and moves desk spot inventory and total delta from `0` to `-5 BTC`.
-- Repeating the same demo call returns an idempotent replay and does not book the
-  trade twice.
-- `POST /rfqs/validate` checks that RFQ notional is strictly greater than USD
-  500,000 using the supplied reference price.
-- `GET /desk/state` and `GET /events` expose the resulting aggregate state and
-  causal event sequence.
-
-The fixture quote is not the future pricing engine.
-
-## Step 3 frontend integration
-
-The React terminal reads scenario and accounting state from FastAPI instead of
-showing invented trading results. The original deterministic endpoint remains
-available as a regression-test seam for this event chain:
-
-`PRICING → AUTO-ACCEPTED → CLIENT FILLED → POSITION UPDATED`
-
-The deterministic test run moves the desk from flat to `-5 BTC` spot inventory
-and total delta. A repeated run is identified as a replay and cannot book the
-same client trade twice. The normal page no longer exposes a manual Inject RFQ
-button. **Reset Demo** clears all current client and hedge state.
-
-The later Step 7 adds RiskPolicy without changing this fill-based accounting
-chain. Automatic hedge recommendations and PnL remain unavailable.
-
-The frontend defaults to `http://127.0.0.1:8000`. To use a different local API,
-set `NEXT_PUBLIC_FLOWHEDGE_API_URL` before starting the frontend.
-
-## Step 4 hedge execution demo
-
-Manual mode exposes an explicit reference target of `0 BTC`. Spot and Perp are
-independently editable with at most two decimal places. A trader can fully hedge
-to the reference target or submit a smaller allocation and intentionally retain
-residual exposure; the combined allocation cannot exceed the current exposure.
-
-- `POST /demo/hedge-orders` validates and records both manual Spot and Perp
-  instructions. Actual positions do not change until fills; only working and
-  projected delta change.
-- `POST /demo/hedge-orders/{order_id}/fills` records an immutable simulated
-  fill. Only these fills change Spot inventory or derivative delta.
-- `POST /demo/hedge-orders/cancel` cancels an untouched hedge batch so its
-  allocation can be edited. Once any fill exists, history cannot be rewritten.
-- Clearly labelled demo controls can apply partial fills, then fill the
-  remainder so actual and working delta move in opposite directions while
-  projected exposure remains reconciled. A completed batch does not prevent a
-  later client exposure from receiving a new manual hedge batch, and completed
-  orders remain visible in the hedge blotter.
-- `GET /demo/hedge-orders` and `GET /demo/hedge-fills` restore the blotter after
-  a page refresh. Reset clears client trades, hedge orders, fills, and events.
-
-The UI shows the live maximum available beside each input after accounting for
-the other input, while the API independently rejects over-hedging. The zero
-reference is a labeled demo assumption, not a Risk Policy output. Manual
-allocation is not presented as a Hedge Optimizer recommendation, and the fixed
-fill prices and fill controls are not real market execution.
-
-## Step 5 Kraken public market data
-
-FastAPI starts a Kraken Spot WebSocket v2 adapter with its application
-lifecycle and subscribes to the public `BTC/USD` level-2 book at depth 25 plus
-instrument metadata. Every exchange update is applied in event order and
-validated with Kraken's top-10 CRC32 checksum before it can replace the latest
-normalized book.
-
-- `GET /market/books/KRAKEN/BTC-USD` returns the latest book, instrument rules,
-  data age, and connection state.
-- `GET /market/connections` returns venue-adapter connection states.
-- The backend marks connecting, live, stale, disconnected, and reconnecting
-  states and retries with bounded backoff after a connection failure.
-- The frontend polls the latest backend view every 250ms. It does not request
-  Kraken directly.
-- In-memory market state is bounded to the current book and metadata for each
-  venue/symbol. It stores no historical tick stream and does not grow with the
-  number of updates.
-
-The live Kraken best bid or ask can be displayed as a manual Spot market candidate,
-but it is explicitly not a hedge recommendation and does not change the fixed
-client quote or simulated fill accounting. The adapter interface, canonical
-symbols, normalized models, registry, and keyed state store leave room for
-additional venues and instruments without coupling them to the UI.
-
-This step intentionally does not include a second venue, Kraken Futures/Perp,
-private API keys, real orders, Risk Policy, Hedge Optimizer, smart order
-routing, Pricing Engine, fees, funding, margin, PnL, or historical market-data
-storage.
-
-## Step 5 slow automatic client flow
-
-The normal demo is now driven by a backend Client Flow Simulator rather than a
-page button. In manual-trader mode it waits a randomly jittered slow interval of
-75–105 seconds between arrivals, centered around roughly 90 seconds. The next
-arrival time is intentionally not exposed to the UI.
-
-- Every generated RFQ uses the captured Kraken mid-price to calculate a varied
-  two-decimal BTC quantity whose notional is strictly greater than USD 500,000.
-  The generator produces both whole and fractional quantities and both client
-  BUY and SELL sides.
-- A new RFQ first remains in `PRICING` so the page can show a spinner. The demo
-  then quotes at the captured Kraken touch, auto-accepts the quote, records the
-  client trade, and updates inventory, delta, notional, RFQ history, and events.
-- This touch-price rule is labelled `DEMO_KRAKEN_TOUCH_AUTO_ACCEPT`; it is a
-  transparent simulation rule, not the future Pricing Engine.
-- New client trades do not wait for previous hedge orders to finish. Existing
-  working hedge delta remains intact while each accepted client fill changes
-  actual inventory and projected exposure.
-- `GET /demo/workspace` gives the frontend one coherent polling view. Pause and
-  resume affect the backend arrival process, while Reset clears the session and
-  restarts its slow schedule.
-- `POST /demo/client-flow/generate` remains available only as a test-support
-  seam; the normal page never calls or displays it.
-
-## Step 6 unified multi-venue market state
-
-At the Step 6 checkpoint, the normalized market layer supported multiple venues and multiple
-instrument types without allowing Spot and Perpetual books with the same
-canonical symbol to collide. The live universe for that checkpoint was:
-
-- Kraken `BTC/USD` Spot.
-- Coinbase `BTC-USD` Spot.
-- Coinbase International `BTC-PERP-INTX` linear Perpetual.
-
-Coinbase Spot and Perpetual L2 data come from the public Advanced Trade market
-data WebSocket. Product rules come from Coinbase's public product endpoint. No
-Coinbase account, private API key, or order permission is used.
-
-- `GET /market/books/{venue}/{instrument_type}/{symbol}` returns one explicitly
-  typed market. The original Spot route remains available for compatibility.
-- `GET /market/snapshots/BTC` atomically returns every registered BTC market,
-  one snapshot version, eligibility, stale/unavailable reasons, current books,
-  product rules, and feed connection state.
-- Connection identity belongs to a specific feed rather than only a venue, so
-  future Spot and derivatives adapters can fail independently when they use
-  separate connections.
-- Coinbase retains a bounded 2,000-level working buffer per side and publishes
-  only the current normalized depth-25 book. No historical updates accumulate.
-- The page polls the unified snapshot and lets the trader inspect each live
-  market while the accepted Step 5 RFQ and manual hedge behavior continues to
-  use Kraken Spot.
-
-Coinbase Perpetual is quoted and settled in USDC. This checkpoint explicitly
-uses `USDC ≈ USD` as a configurable `1:1 demo assumption`; it does not silently
-rename the quote currency. Contract structure, multiplier, settlement asset,
-tick, quantity increment, and minimum quantity are preserved for the future
-Cost Engine. Funding cost is intentionally deferred and is not included in any
-calculation.
-
-This step does not yet compare execution costs, recommend hedges, route orders,
-or change RFQ pricing. Those remain responsibilities of the later Cost Engine,
-Hedge Optimizer, SOR, and Pricing Engine steps.
-
-## Step 7 RiskPolicy v1.1
-
-RiskPolicy answers only whether directional delta should be hedged and how much
-exposure should be removed. It does not choose Spot versus Perpetual, select a
-venue, optimize a route, or create hedge orders.
-
-The configurable values below are visibly labelled **DEMO DESK ASSUMPTIONS**.
-They are not OSL internal risk limits:
-
-- Soft delta limit: USD 1,000,000.
-- Hard delta limit: USD 3,000,000.
-- Auto-hedge target: 90% of the Soft Limit, or USD 900,000.
-- Hard-breach grace period: five seconds.
-
-GREEN warehouses actual exposure at or below the soft limit. YELLOW targets the
-signed soft-limit boundary. During a RED grace period, the trader-facing
-advisory target is also the signed Soft Limit rather than flat. If RED persists
-for five seconds, the automatic risk-control target becomes 90% of the signed
-Soft Limit, leaving a USD 100,000 buffer inside GREEN without eliminating all
-warehouse exposure. Classification uses actual, fill-based delta; working
-orders reduce advisory and automatic requirements separately. Conflict and
-overhedge guards protect future auto execution from unsafe working-order state.
-
-The independent BTC risk reference is the median of fresh Kraken and Coinbase
-USD Spot mids. One healthy source is accepted in degraded mode. If neither is
-available, RiskPolicy returns `UNAVAILABLE / HOLD` rather than silently returning
-GREEN or inventing a price.
-
-A RED breach owns a stable breach ID and five-second timer. Market ticks, desk
-version changes, API polling, and browser refreshes do not reset it. Exiting RED
-cancels the countdown before takeover; remaining RED emits one idempotent
-`AUTO_HEDGE_REQUIRED` event carrying the latest USD 900,000 target and remaining
-BTC-equivalent requirement. Once an intervention has been armed, its structural
-completion boundary remains USD 900,000 even though ordinary GREEN begins at
-USD 1,000,000. Step 7 deliberately does not create a fake optimal hedge or any
-automatic order.
-
-- `GET /risk/assessment` returns the current assessment and breach lifecycle.
-- `GET /demo/workspace` includes the same assessment beside desk, RFQ, hedge,
-  and event state.
-
-## Step 7.5 executable and derivatives market data
-
-The public candidate universe is now six markets:
-
-- Kraken BTC/USD Spot and `PI_XBTUSD` inverse Perpetual.
-- Coinbase BTC/USD Spot and `BTC-PERP-INTX` linear Perpetual.
-- OKX BTC/USDT Spot and `BTC-USDT-SWAP` linear Perpetual.
-
-The page renders only the top five levels. The backend separately retains up to
-200 real L2 levels per side where the venue supplies them; it never synthesizes
-or extrapolates missing liquidity. `GET
-/market/executable-books/{venue}/{instrument_type}/{symbol}` exposes that bounded
-book to the Cost Engine and future optimizer.
-
-Derivative source quantities are converted into BTC equivalent inside the
-market layer from live instrument metadata. Linear contract quantities use the
-venue contract value; Kraken inverse quantities are converted at each price
-level. No venue contract multiplier is hard-coded in optimizer-facing data.
-
-Where public data exists, the normalized derivative context retains mark,
-index, current/predicted funding, funding timing, open interest in native/BTC/USD
-units, basis, and separate observation timestamps. Unavailable fields remain
-null. A bounded five-second observation series covers roughly one hour for
-future 5-minute/1-hour open-interest changes without becoming an unbounded tick
-database. Funding is data only: there is no expected funding-cost calculation
-until a future hedge horizon is defined.
-
-USDT≈USD and USDC≈USD are centralized, explicit 1:1 demo assumptions. Stale or
-disconnected books are ineligible, and each adapter fails independently so one
-venue cannot terminate the others.
-
-## Step 8A Executable Cost Engine v1
-
-The backend can now estimate the standalone immediate execution cost of a
-specified desk-side BUY or SELL quantity on any of the six normalized markets.
-Each estimate consumes one atomic executable-market snapshot and sweeps only
-the real BTC-equivalent L2 levels captured in that snapshot. It partially
-consumes the last required level and returns explicit unfilled quantity when
-known depth is insufficient; it never extrapolates liquidity.
-
-The immutable result includes simulated fills, executable VWAP, arrival mid,
-spread cost, depth impact, total price cost, executed quote/USD notional, and
-the snapshot and book timestamps used. USD conversion is explicit: USD uses an
-identity conversion, while USDT and USDC retain their centralized 1:1 demo
-assumption labels.
-
-Taker fees are represented by a centralized configuration model. The current
-demo runtime supplies the explicitly disclosed Step 9.3.1 uniform 2.0 bps
-assumption; callers can still pass an empty or alternative schedule, in which
-case results preserve pre-fee economics and honestly report unconfigured fees.
-
-- `POST /analytics/execution-cost/estimate` evaluates one standalone market.
-- `POST /analytics/execution-cost/compare` evaluates every registered candidate
-  against one shared snapshot. It does not rank, split, recommend, or optimize.
-
-Step 8A is analytical only: it cannot create hedge orders or fills, mutate desk
-state, change risk, calculate Perpetual carry/funding economics, or perform
-Step 9 optimization. The React dashboard is intentionally unchanged.
-
-## Step 8B Derivative Hedge Economics v1
-
-The backend can now combine a Step 8A result with an explicit expected holding
-horizon and the derivative context captured in the same atomic market snapshot.
-Spot carry is zero in v1. Perpetual funding is modeled only at discrete funding
-event timestamps inside the entry-exclusive, exit-inclusive holding window;
-there is no naive hourly prorating.
-
-Predicted funding is preferred when the normalized derivative context is fresh.
-Current funding is an explicitly degraded fallback. If multiple events occur,
-the latest usable estimate is held flat and labelled
-`FLAT_RATE_EXTRAPOLATION`. If an event occurs but its schedule or fresh rate is
-unavailable, carry and total economics remain unavailable rather than being
-reported as zero. Positive normalized funding means long pays short, so
-negative expected funding costs remain valid desk credits.
-
-Funding uses only Step 8A's actually executable quantity and notional. Partial
-liquidity remains visible. Entry basis and Open Interest are carried as
-timestamped context only and do not alter cost. Capital, financing, borrow,
-custody, expected basis convergence, unwind, volatility, venue credit, and OI
-penalties remain explicitly excluded rather than receiving invented values.
-
-- `POST /analytics/hedge-economics/estimate` evaluates one standalone
-  candidate.
-- `POST /analytics/hedge-economics/compare` runs Step 8A then Step 8B for every
-  registered candidate on one shared snapshot. It does not rank, allocate,
-  recommend, or optimize.
-
-Step 8B is backend-only and does not change the dashboard or trading state.
-Its normalized results feed the Step 9 Hedge Optimizer.
-
-## Step 9.1–9.2 Hedge Optimizer core
-
-The backend first builds an immutable candidate set from the current advisory
-requirement and one atomic executable-market snapshot. Stale, disconnected,
-unavailable, non-executable, non-normalizable, or economically incomparable
-markets are excluded with structured reason codes. Working-order conflicts and
-overhedges block optimization before allocation.
-
-The marginal allocator then sweeps normalized L2 liquidity across eligible
-venues and Spot/Perpetual instruments. It chooses the cheapest reachable next
-slice using Step 8A immediate cost plus Step 8B carry economics, respects native
-quantity steps and minimums, and returns a deterministic `HedgePlan` with full,
-partial, blocked, or no-feasible status. The plan is analytical: Steps 9.1–9.2
-cannot create orders or fills.
-
-## Step 9.3 Advisory workflow integration
-
-RiskPolicy advisory requirements now drive the real Candidate Builder and
-Marginal Allocator in the existing Hedge Decision Workspace. YELLOW, and RED
-inside its five-second grace period, target the $1M soft boundary. The $900K
-automatic target remains isolated for Step 9.4.
-
-The existing System Recommendation area renders the plan's current/target/
-projected delta, honest feasibility, venue/instrument legs, executable VWAP,
-expected cost, residual quantity, snapshot provenance, and deterministic
-explanation facts. `USE SYSTEM PLAN` converts accepted legs to idempotent
-simulated working `HedgeOrder`s; it never creates direct fills. `MANUAL OVERRIDE`
-remains a separate trader decision path.
-
-Plans are invalidated and regenerated after material DeskState or RiskPolicy
-changes, or when market eligibility/data quality changes. Ordinary price ticks
-do not churn a recommendation. Acceptance revalidates current exposure,
-working-order guards, venue eligibility, freshness, and prior execution before
-creating orders. Existing simulated fills still own all position changes.
-
-Step 9.3.1 supplies two centralized and explicitly disclosed demo economics
-assumptions: a uniform 2.0 bps taker fee for all six venue/instrument mappings
-and a default four-hour expected hedge horizon. The equal fee prevents invented
-venue-tier differences from biasing routing; these values are not actual OSL or
-venue institutional fees. They can later be replaced without changing the book
-sweeper, cost/funding formulas, candidate builder, or allocator.
-
-The runtime can therefore produce genuine live-data HedgePlans while continuing
-to exclude stale, disconnected, illiquid, metadata-incomplete, or funding-
-incomplete candidates. Test coverage includes fully and partially feasible
-plans, fee application, plan acceptance, idempotency, invalidation, and
-order/fill accounting.
-
-## Step 9.4 Hard-limit Auto Hedge
-
-RiskPolicy v1.1's persistent hard-breach lifecycle now hands the existing
-idempotent `AUTO_HEDGE_REQUIRED` event to a dedicated Auto Risk Controller.
-RED remains trader-controlled during the five-second grace period. If the
-breach persists, the controller refreshes DeskState, working orders, the risk
-reference, RiskAssessment, and executable markets before building an
-`AUTO_RISK` optimization request from `auto_remaining_hedge_requirement_btc`.
-
-The controller reuses the Step 9.1/9.2 optimizer and converts legitimate full
-or partial plans into auditable `AUTO_RISK` HedgeOrders. Simulated execution
-still passes through the ordinary HedgeOrder → HedgeFill → DeskState accounting
-chain. Auto-owned orders carry intervention, breach, and plan identifiers and
-can be cancelled after target completion, requirement shrinkage, or venue/data
-invalidation. Repeated trigger events for one breach cannot duplicate an
-intervention or its orders.
-
-Every fill and client-flow change is reassessed against the latest reference
-price. Once intervention begins, it continues below the normal $1M soft
-boundary until absolute exposure is at or below the buffered $900K Auto Risk
-target; it never intentionally flattens the desk. Missing funding continues to
-exclude only the affected Perpetual, insufficient legitimate liquidity executes
-the feasible portion and waits for market change, and a complete lack of valid
-candidates produces a visible critical blocked state rather than fabricated
-liquidity. The existing recommendation area switches to Auto Risk status and
-removes trader acceptance/override controls while execution ownership is active.
-
-## Validate
+### Start the backend
 
 ```bash
-npm run build
-npm test
 source .venv/bin/activate
-python -m pytest
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
+
+### Start the frontend
+
+In a second terminal:
+
+```bash
+npm run dev
+```
+
+Open:
+
+- Trading workstation: [http://localhost:3000](http://localhost:3000)
+- API health: [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health)
+- Interactive API documentation: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+
+The frontend uses `http://127.0.0.1:8000` by default. Set `NEXT_PUBLIC_FLOWHEDGE_API_URL` before starting the frontend to use a different API origin.
+
+## Typical session
+
+1. Wait for the market header to show healthy public feeds and populated normalized books.
+2. Observe a client RFQ move from pricing to accepted, then verify actual delta and risk update.
+3. Review the system hedge recommendation, its route allocation, and economic explanation.
+4. Accept the system plan or enter a manual venue allocation, preview it, and execute the simulated batch.
+5. Confirm that fills—not orders—change inventory, then inspect execution metrics, risk re-assessment, blotters, event tape, and reconciled PnL.
+
+The client-flow control can be paused or resumed without predicting the arrival time of the next order. Reset clears the in-memory trading session and starts a fresh accounting period.
+
+## API overview
+
+| Area | Representative routes |
+| --- | --- |
+| System | `GET /health` |
+| Market data | `GET /market/connections`, `GET /market/snapshots/{base_asset}`, `GET /market/books/{venue}/{instrument_type}/{symbol}` |
+| Execution analytics | `POST /analytics/execution-cost/estimate`, `POST /analytics/execution-cost/compare` |
+| Hedge economics | `POST /analytics/hedge-economics/estimate`, `POST /analytics/hedge-economics/compare` |
+| RFQ validation | `POST /rfqs/validate` |
+| Workspace and PnL | `GET /demo/workspace`, `GET /demo/pnl` |
+| Risk | `GET /risk/assessment` |
+| Manual execution | `POST /demo/manual-hedges/preview`, `POST /demo/manual-hedges/submit`, `POST /demo/execution-batches/{batch_id}/execute` |
+| Advisory plans | `POST /demo/advisory-hedge-plans/{plan_id}/accept`, `POST /demo/advisory-hedge-plans/{plan_id}/reject` |
+| State and audit | `GET /desk/state`, `GET /events`, `GET /demo/hedge-orders`, `GET /demo/hedge-fills` |
+
+The `/docs` page contains the complete request and response schemas. Pricing and hedge optimization are normally orchestrated through the coherent workspace workflow rather than exposed as independent command endpoints.
+
+## Verification
+
+Run frontend checks from the repository root:
+
+```bash
+npm run lint
+npm test
+```
+
+Run backend tests with the virtual environment active:
+
+```bash
+source .venv/bin/activate
+python -m pytest -q
+```
+
+The test suites cover state transitions, market normalization, pricing, risk, L2 execution cost, funding economics, optimizer allocation, advisory and automatic hedge workflows, manual execution, PnL accounting, reconciliation, API behavior, and rendered UI output.
+
+## Current scope and limitations
+
+- Client RFQs are synthetic and accepted automatically after the pricing state.
+- Hedge execution is simulated against current public L2; it does not model exchange queue priority, network latency, rejects, or partial exchange acknowledgements.
+- No private exchange accounts, balances, margin state, or live order entry are used.
+- Fees, hedge horizon, stablecoin parity, and risk limits are configurable assumptions.
+- Expected funding affects hedge selection, but actual funding cashflows are not accrued into PnL.
+- Borrow cost, financing, rebates, liquidation mechanics, and tax are not modeled.
+- Runtime state and session PnL are in memory and reset on process restart.
+- Perpetual exposure and PnL are expressed as linearized BTC-equivalent economics.
+- The current market universe is BTC only.
+
+## Possible extensions
+
+- Inventory-aware client pricing
+- Internalization and external-hedge savings analytics
+- Full concurrent plan invalidation and re-optimization as client flow changes
+- Persistent event, trade, and PnL storage
+- Account-specific fee tiers, margin, borrow, and realized funding
+- Additional assets, venues, order types, and production execution connectors
